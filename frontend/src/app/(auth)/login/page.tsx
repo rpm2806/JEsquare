@@ -19,31 +19,127 @@ export default function LoginPage() {
   
   // Custom interactive Google Sign-in simulation states
   const [showGoogleModal, setShowGoogleModal] = useState(false);
+  const [googleModalStep, setGoogleModalStep] = useState<'CHOOSE' | 'INPUT' | 'LOADING'>('CHOOSE');
+  const [loadingStatus, setLoadingStatus] = useState('Connecting to Google...');
   const [googleName, setGoogleName] = useState('');
   const [googleEmail, setGoogleEmail] = useState('');
-  const [googleAvatar, setGoogleAvatar] = useState('https://lh3.googleusercontent.com/a/default-user');
+  const [googleAvatar, setGoogleAvatar] = useState('https://github.com/rpm2806.png');
+
+  const { login } = useAuthStore();
+  const router = useRouter();
+
+  // ─── 🚀 GOOGLE IDENTITY SERVICES OAUTH INTEGRATION ───
+  
+  // 1. Pure client-side zero-dependency JWT Decoder
+  const decodeGoogleCredential = (credential: string) => {
+    try {
+      const base64Url = credential.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(
+        window.atob(base64)
+          .split('')
+          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
+      return JSON.parse(jsonPayload);
+    } catch (e) {
+      return null;
+    }
+  };
+
+  // 2. Google OAuth callback handler
+  const handleGoogleCredentialResponse = async (response: any) => {
+    setError('');
+    setLoading(true);
+    try {
+      const decodedPayload = decodeGoogleCredential(response.credential);
+      if (!decodedPayload) {
+        throw new Error('Failed to decode Google Identity credential.');
+      }
+
+      // Register or login user dynamically on Neon PostgreSQL
+      const res = await api.post('/auth/google', {
+        token: response.credential,
+        email: decodedPayload.email,
+        name: decodedPayload.name,
+        avatar: decodedPayload.picture,
+      });
+
+      login(res.data.user, res.data.accessToken, res.data.refreshToken);
+      router.push('/dashboard'); // Land on dashboard which triggers Role Selection modal!
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { message?: string } } };
+      setError(error.response?.data?.message || 'Google Sign-In failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 3. Dynamically inject Google Identity Services script
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    document.body.appendChild(script);
+
+    script.onload = () => {
+      initializeGoogleAuth();
+    };
+
+    return () => {
+      try {
+        document.body.removeChild(script);
+      } catch (e) {
+        // ignore
+      }
+    };
+  }, []);
+
+  const initializeGoogleAuth = () => {
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    if (typeof window !== 'undefined' && (window as any).google?.accounts?.id && clientId) {
+      (window as any).google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleGoogleCredentialResponse,
+      });
+      (window as any).google.accounts.id.renderButton(
+        document.getElementById('google-signin-button'),
+        { theme: 'filled_blue', size: 'large', width: '380', shape: 'pill' }
+      );
+    }
+  };
+
+  // Double check initialization after mounting delay
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      initializeGoogleAuth();
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Auto-detect and fetch the real Google Profile picture dynamically on email typing!
   useEffect(() => {
     if (googleEmail && googleEmail.includes('@') && googleEmail.includes('.')) {
       setGoogleAvatar(`https://unavatar.io/google/${googleEmail}`);
     } else if (googleName) {
-      // Fallback to beautiful initial letter avatar if email is incomplete
       setGoogleAvatar(`https://ui-avatars.com/api/?name=${encodeURIComponent(googleName)}&background=6366f1&color=fff&size=128`);
     } else {
       setGoogleAvatar('https://lh3.googleusercontent.com/a/default-user');
     }
   }, [googleEmail, googleName]);
 
-  const { login } = useAuthStore();
-  const router = useRouter();
-
   const handleGoogleLogin = () => {
-    // Open the Google Sign-in details modal so they can customize their identity!
+    // Open our gorgeous Account Chooser Modal!
+    setGoogleModalStep('CHOOSE');
     setShowGoogleModal(true);
   };
 
   const executeGoogleLogin = async () => {
+    await executeGoogleLoginDirectly(googleName, googleEmail, googleAvatar);
+  };
+
+  const executeGoogleLoginDirectly = async (name: string, email: string, avatar: string) => {
     setError('');
     setLoading(true);
     setShowGoogleModal(false);
@@ -51,20 +147,68 @@ export default function LoginPage() {
       const mockGoogleToken = 'mock-google-token-' + Math.random().toString(36).substring(2);
       const res = await api.post('/auth/google', {
         token: mockGoogleToken,
-        email: googleEmail,
-        name: googleName,
-        avatar: googleAvatar,
+        email: email,
+        name: name,
+        avatar: avatar,
       });
       
       login(res.data.user, res.data.accessToken, res.data.refreshToken);
-      router.push('/dashboard');
+      router.push('/dashboard'); // Land on dashboard which triggers Role Selection modal!
     } catch (err: unknown) {
       const error = err as { response?: { data?: { message?: string } } };
       setError(error.response?.data?.message || 'Google Sign-In failed');
     } finally {
       setLoading(false);
+      setGoogleModalStep('CHOOSE');
     }
   };
+
+  const selectGoogleAccount = async (account: { name: string; email: string; avatar: string }) => {
+    setGoogleName(account.name);
+    setGoogleEmail(account.email);
+    setGoogleAvatar(account.avatar);
+    setGoogleModalStep('LOADING');
+    
+    // High fidelity loader simulation to look professional
+    setLoadingStatus('Connecting to Google Accounts...');
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    
+    setLoadingStatus('Fetching profile details...');
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    
+    setLoadingStatus('Authenticating with JEsquare secure server...');
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    
+    await executeGoogleLoginDirectly(account.name, account.email, account.avatar);
+  };
+
+  const googleAccounts = [
+    {
+      name: 'Rupam Kumar',
+      email: 'rupamkr2040@gmail.com',
+      avatar: 'https://github.com/rpm2806.png',
+    },
+    {
+      name: 'Rupam Kumar',
+      email: 'rpm2806@gmail.com',
+      avatar: 'https://github.com/rpm2806.png',
+    },
+    {
+      name: 'Google Student',
+      email: 'student.jesquare@gmail.com',
+      avatar: 'https://ui-avatars.com/api/?name=Google+Student&background=3b82f6&color=fff&size=128',
+    },
+    {
+      name: 'Google Teacher',
+      email: 'teacher.jesquare@gmail.com',
+      avatar: 'https://ui-avatars.com/api/?name=Google+Teacher&background=a855f7&color=fff&size=128',
+    },
+    {
+      name: 'Google Institute',
+      email: 'institute.jesquare@gmail.com',
+      avatar: 'https://ui-avatars.com/api/?name=Google+Institute&background=10b981&color=fff&size=128',
+    },
+  ];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -214,23 +358,29 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={handleGoogleLogin}
-            disabled={loading}
-            className="w-full justify-center"
-            icon={
-              <svg className="w-4 h-4 shrink-0 mr-2" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
-                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335"/>
-              </svg>
-            }
-          >
-            Continue with Google
-          </Button>
+          {process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ? (
+            <div className="w-full flex justify-center h-[44px] relative overflow-hidden rounded-xl border border-slate-800 bg-white hover:bg-slate-50 transition-colors">
+              <div id="google-signin-button" className="w-full flex justify-center"></div>
+            </div>
+          ) : (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={handleGoogleLogin}
+              disabled={loading}
+              className="w-full justify-center"
+              icon={
+                <svg className="w-4 h-4 shrink-0 mr-2" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
+                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335"/>
+                </svg>
+              }
+            >
+              Continue with Google
+            </Button>
+          )}
 
           <div className="mt-8 text-center">
             <p className="text-sm text-slate-400">
@@ -246,82 +396,182 @@ export default function LoginPage() {
       {/* Google Sign-in Details Modal */}
       {showGoogleModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-700/60 rounded-3xl shadow-2xl p-8 animate-scale-in">
-            {/* Header */}
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-12 h-12 rounded-2xl bg-white flex items-center justify-center shadow-lg relative overflow-hidden shrink-0">
-                {/* Dynamically loads Google Profile Picture or Initials */}
-                <img 
-                  src={googleAvatar} 
-                  alt="Google Avatar" 
-                  className="w-full h-full object-cover animate-fade-in"
-                  onError={(e) => {
-                    // Fail-safe default
-                    (e.target as HTMLImageElement).src = 'https://lh3.googleusercontent.com/a/default-user';
-                  }}
-                />
-              </div>
-              <div>
-                <h2 className="text-xl font-bold text-white">Google Account Setup</h2>
-                <p className="text-slate-400 text-sm">Real-time profile picture sync active</p>
-              </div>
-            </div>
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden p-0 animate-scale-in">
+            {googleModalStep === 'CHOOSE' && (
+              <div className="p-6 sm:p-8">
+                {/* Header */}
+                <div className="text-center mb-6">
+                  <div className="flex justify-center mb-4">
+                    <svg className="w-8 h-8 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
+                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335"/>
+                    </svg>
+                  </div>
+                  <h2 className="text-xl font-bold text-white tracking-tight">Choose an account</h2>
+                  <p className="text-slate-400 text-sm mt-1">to continue to <span className="text-indigo-400 font-semibold">JEsquare</span></p>
+                </div>
 
-            {/* Inputs */}
-            <div className="space-y-4 mb-6">
-              {/* Circular Avatar Preview with pulse effect */}
-              <div className="flex justify-center my-6">
-                <div className="relative group">
-                  <div className="absolute inset-0 bg-indigo-500/20 rounded-full blur-md group-hover:bg-indigo-500/30 transition-all duration-300 animate-pulse" />
-                  <div className="w-24 h-24 rounded-full border-2 border-indigo-500/50 p-1 relative z-10 bg-slate-950 overflow-hidden shadow-xl">
+                {/* Account List */}
+                <div className="space-y-1.5 max-h-[280px] overflow-y-auto pr-1 select-none">
+                  {googleAccounts.map((account, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => selectGoogleAccount(account)}
+                      className="w-full flex items-center gap-3.5 p-3 rounded-2xl bg-slate-800/30 hover:bg-slate-800/80 border border-slate-800/40 hover:border-indigo-500/40 text-left transition-all duration-300"
+                    >
+                      <div className="w-10 h-10 rounded-full border border-slate-700/50 overflow-hidden shrink-0">
+                        <img
+                          src={account.avatar}
+                          alt={account.name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = 'https://lh3.googleusercontent.com/a/default-user';
+                          }}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-white truncate">{account.name}</p>
+                        <p className="text-xs text-slate-400 truncate">{account.email}</p>
+                      </div>
+                      <div className="w-5 h-5 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
+                        <svg className="w-3 h-3 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="my-4 border-t border-slate-800/60" />
+
+                {/* Use another account button */}
+                <button
+                  onClick={() => setGoogleModalStep('INPUT')}
+                  className="w-full flex items-center gap-3.5 p-3 rounded-2xl bg-slate-800/10 hover:bg-slate-800/60 border border-dashed border-slate-800 hover:border-slate-700 text-left transition-all duration-300"
+                >
+                  <div className="w-10 h-10 rounded-full bg-slate-950/40 flex items-center justify-center text-slate-400 shrink-0">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-slate-300">Use another account</p>
+                  </div>
+                </button>
+
+                {/* Bottom Notice */}
+                <p className="text-[10px] text-slate-500 text-center leading-normal mt-6">
+                  To continue, Google will share your name, email address, language preference, and profile picture with JEsquare.
+                </p>
+
+                <div className="mt-4 flex justify-end">
+                  <button
+                    onClick={() => setShowGoogleModal(false)}
+                    className="text-xs text-slate-400 hover:text-white transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {googleModalStep === 'INPUT' && (
+              <div className="p-6 sm:p-8">
+                {/* Header */}
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="w-12 h-12 rounded-2xl bg-white flex items-center justify-center shadow-lg relative overflow-hidden shrink-0">
                     <img 
                       src={googleAvatar} 
-                      alt="Google Avatar Preview" 
-                      className="w-full h-full rounded-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      alt="Google Avatar" 
+                      className="w-full h-full object-cover"
                       onError={(e) => {
                         (e.target as HTMLImageElement).src = 'https://lh3.googleusercontent.com/a/default-user';
                       }}
                     />
                   </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-white">Google Account Setup</h2>
+                    <p className="text-slate-400 text-sm">Enter custom details manually</p>
+                  </div>
+                </div>
+
+                {/* Inputs */}
+                <div className="space-y-4 mb-6">
+                  <div className="flex justify-center my-4">
+                    <div className="relative group">
+                      <div className="absolute inset-0 bg-indigo-500/20 rounded-full blur-md group-hover:bg-indigo-500/30 transition-all duration-300 animate-pulse" />
+                      <div className="w-20 h-20 rounded-full border border-indigo-500/50 p-0.5 relative z-10 bg-slate-950 overflow-hidden shadow-xl">
+                        <img 
+                          src={googleAvatar} 
+                          alt="Google Avatar Preview" 
+                          className="w-full h-full rounded-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = 'https://lh3.googleusercontent.com/a/default-user';
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <Input
+                    label="Full Name"
+                    type="text"
+                    placeholder="Enter your name"
+                    value={googleName}
+                    onChange={(e) => setGoogleName(e.target.value)}
+                    required
+                  />
+                  <Input
+                    label="Google Email"
+                    type="email"
+                    placeholder="your.email@gmail.com"
+                    value={googleEmail}
+                    onChange={(e) => setGoogleEmail(e.target.value)}
+                    required
+                  />
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-3">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setGoogleModalStep('CHOOSE')}
+                    className="flex-1 justify-center"
+                  >
+                    Back
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={executeGoogleLogin}
+                    disabled={!googleName || !googleEmail}
+                    className="flex-1 justify-center"
+                  >
+                    Sign In
+                  </Button>
                 </div>
               </div>
+            )}
 
-              <Input
-                label="Full Name"
-                type="text"
-                placeholder="Enter your name"
-                value={googleName}
-                onChange={(e) => setGoogleName(e.target.value)}
-                required
-              />
-              <Input
-                label="Google Email"
-                type="email"
-                placeholder="your.email@gmail.com"
-                value={googleEmail}
-                onChange={(e) => setGoogleEmail(e.target.value)}
-                required
-              />
-            </div>
+            {googleModalStep === 'LOADING' && (
+              <div className="p-8 sm:p-10 flex flex-col items-center justify-center text-center min-h-[360px] animate-fade-in">
+                {/* Google Spinning Dots */}
+                <div className="relative flex items-center justify-center w-20 h-20 mb-8">
+                  <div className="absolute inset-0 rounded-full border-4 border-indigo-500/10" />
+                  <div className="absolute inset-0 rounded-full border-4 border-t-indigo-500 border-r-indigo-500 animate-spin" />
+                  <svg className="w-8 h-8 text-indigo-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 009 11V7a4 4 0 00-8 0v4c0 1.98.762 3.766 1.992 5.094m13.98 0A13.901 13.901 0 0115 11V7a4 4 0 00-8 0v4c0 1.98.762 3.766 1.992 5.094m12.008 1.844A13.937 13.937 0 0117 16v-5a4 4 0 00-8 0v5a3.99 3.99 0 00-1.386 3.064M18 21v-2a4 4 0 00-5-3.87" />
+                  </svg>
+                </div>
 
-            {/* Actions */}
-            <div className="flex gap-3">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => setShowGoogleModal(false)}
-                className="flex-1 justify-center"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={executeGoogleLogin}
-                className="flex-1 justify-center"
-              >
-                Sign In
-              </Button>
-            </div>
+                <h3 className="text-lg font-bold text-white mb-2">Google Authenticating</h3>
+                <div className="flex items-center gap-1.5 justify-center">
+                  <span className="text-slate-400 text-sm animate-pulse">{loadingStatus}</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
