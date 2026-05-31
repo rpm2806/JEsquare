@@ -13,6 +13,7 @@ import { SubscriptionsModule } from './modules/subscriptions/subscriptions.modul
 import { OcrModule } from './modules/ocr/ocr.module';
 import { DoubtsModule } from './modules/doubts/doubts.module';
 import { StorageModule } from './modules/storage/storage.module';
+import { PaymentModule } from './modules/payment/payment.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { StorageModule } from './modules/storage/storage.module';
     OcrModule,
     DoubtsModule,
     StorageModule,
+    PaymentModule,
   ],
 })
 export class AppModule {}

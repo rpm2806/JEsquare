@@ -17,11 +17,17 @@ const steps = ['Basic Info', 'Subjects & Chapters', 'Difficulty', 'Review & Gene
 
 export default function CreateTestPage() {
   const router = useRouter();
-  const { user } = useAuthStore();
+  const { user, setUser } = useAuthStore();
   const [currentStep, setCurrentStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [metaLoading, setMetaLoading] = useState(true);
   const [dbSubjects, setDbSubjects] = useState<any[]>([]);
+  const [studentBalance, setStudentBalance] = useState(0);
+  const [studentTestCount, setStudentTestCount] = useState(0);
+  const [payingStudent, setPayingStudent] = useState(false);
+  const [showMockModal, setShowMockModal] = useState(false);
+  const [mockDetails, setMockDetails] = useState<any>(null);
+  
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -32,6 +38,26 @@ export default function CreateTestPage() {
     chapters: [] as string[],
     difficulty: { easy: 30, medium: 50, hard: 20 },
   });
+
+  const fetchStudentLimits = async () => {
+    if (!user) return;
+    try {
+      const userRes = await api.get(`/users/${user.id}`);
+      setStudentBalance(userRes.data.balance || 0);
+
+      const testsRes = await api.get(`/tests`);
+      const createdByMe = testsRes.data.filter((t: any) => t.createdById === user.id);
+      setStudentTestCount(createdByMe.length);
+    } catch (err) {
+      console.error('Failed to load student quota details', err);
+    }
+  };
+
+  useEffect(() => {
+    if (user && user.role === 'STUDENT') {
+      fetchStudentLimits();
+    }
+  }, [user]);
 
   useEffect(() => {
     async function loadMeta() {
@@ -47,6 +73,126 @@ export default function CreateTestPage() {
     }
     loadMeta();
   }, []);
+
+  const loadRazorpayScript = () => {
+    return new Promise((resolve) => {
+      if ((window as any).Razorpay) {
+        resolve(true);
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+  };
+
+  const handleStudentPayment = async () => {
+    if (!user) return;
+    try {
+      setPayingStudent(true);
+
+      // 1. Create order on backend for ₹10
+      const orderRes = await api.post('/payment/order', {
+        planId: 'STUDENT_CREDITS',
+        amount: 10,
+      });
+
+      const order = orderRes.data;
+
+      // 2. If mock order, open sandbox modal!
+      if (order.isMock) {
+        setMockDetails({
+          orderId: order.id,
+          amount: 10,
+          userId: user.id,
+        });
+        setShowMockModal(true);
+        return;
+      }
+
+      // 3. Otherwise open real checkout popup
+      const loaded = await loadRazorpayScript();
+      if (!loaded) {
+        alert("Failed to load Razorpay SDK. Please check your connection.");
+        return;
+      }
+
+      const options = {
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '',
+        amount: order.amount,
+        currency: order.currency,
+        name: 'JEsquare',
+        description: 'Add Wallet Balance (₹10)',
+        order_id: order.id,
+        handler: async (response: any) => {
+          try {
+            setPayingStudent(true);
+            const verifyRes = await api.post('/payment/verify-student', {
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              userId: user.id,
+              amount: 10,
+            });
+
+            // Update local user store and state
+            setUser({ ...user, balance: verifyRes.data.user.balance });
+            setStudentBalance(verifyRes.data.user.balance);
+            alert('Payment successful! ₹10 has been added to your wallet balance.');
+          } catch (err: any) {
+            alert(err.response?.data?.message || 'Payment verification failed.');
+          } finally {
+            setPayingStudent(false);
+          }
+        },
+        prefill: {
+          name: user.name,
+          email: user.email,
+        },
+        theme: {
+          color: '#6366f1',
+        },
+      };
+
+      const rzp = new (window as any).Razorpay(options);
+      rzp.open();
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Failed to initiate payment.');
+    } finally {
+      setPayingStudent(false);
+    }
+  };
+
+  const handleAuthorizeStudentMockPayment = async () => {
+    if (!user || !mockDetails) return;
+    try {
+      setPayingStudent(true);
+      setShowMockModal(false);
+
+      const mockPaymentId = `pay_mock_${Math.random().toString(36).substring(2, 10)}`;
+      const mockSignature = `sig_mock_${Math.random().toString(36).substring(2, 10)}`;
+
+      const verifyRes = await api.post('/payment/verify-student', {
+        razorpay_order_id: mockDetails.orderId,
+        razorpay_payment_id: mockPaymentId,
+        razorpay_signature: mockSignature,
+        userId: user.id,
+        amount: 10,
+      });
+
+      // Update local state and store
+      setUser({ ...user, balance: verifyRes.data.user.balance });
+      setStudentBalance(verifyRes.data.user.balance);
+      alert(`[Sandbox] Success! ₹10 has been credited to your practice wallet balance.`);
+    } catch (e: any) {
+      alert("Mock payment verification failed.");
+    } finally {
+      setPayingStudent(false);
+      setMockDetails(null);
+    }
+  };
 
   const toggleSubject = (subjectId: string) => {
     setFormData((prev) => {
@@ -346,15 +492,47 @@ export default function CreateTestPage() {
             </div>
 
             {user?.role === 'STUDENT' && (
-              <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
-                <div className="flex items-start gap-2.5">
-                  <span className="text-lg shrink-0">💡</span>
-                  <div>
-                    <p className="text-sm text-amber-300 font-semibold mb-1">Student Self-Practice Limit</p>
-                    <p className="text-xs text-amber-200/80 leading-relaxed">
-                      You get <strong>2 free self-practice tests</strong>. After that, each additional test costs <strong>₹5</strong> from your wallet.
-                      Make sure you have sufficient balance before generating.
+              <div className={cn(
+                "p-5 rounded-2xl border transition-all duration-300",
+                studentTestCount >= 2 && studentBalance < 5
+                  ? "bg-rose-500/10 border-rose-500/20"
+                  : "bg-amber-500/10 border-amber-500/20"
+              )}>
+                <div className="flex items-start gap-3">
+                  <span className="text-xl shrink-0">
+                    {studentTestCount >= 2 && studentBalance < 5 ? "🔴" : "💡"}
+                  </span>
+                  <div className="flex-1">
+                    <p className={cn(
+                      "text-sm font-semibold mb-1",
+                      studentTestCount >= 2 && studentBalance < 5 ? "text-rose-300" : "text-amber-300"
+                    )}>
+                      {studentTestCount >= 2 && studentBalance < 5 ? "Practice Quota Limit Reached!" : "Student Practice Quota Info"}
                     </p>
+                    <p className="text-xs text-slate-400 leading-relaxed mb-4">
+                      You have generated <strong className="text-white">{studentTestCount} tests</strong> for self practice (2 are free). 
+                      Each additional test costs <strong className="text-white">₹5</strong> from your wallet. 
+                      Your current wallet balance is <strong className="text-white">₹{studentBalance}</strong>.
+                    </p>
+
+                    {studentTestCount >= 2 && studentBalance < 5 ? (
+                      <div className="flex flex-col sm:flex-row items-center gap-3 bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+                        <p className="text-xs text-rose-400 font-medium">Insufficient balance to generate! Please add ₹10 via Razorpay to continue.</p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          isLoading={payingStudent}
+                          onClick={handleStudentPayment}
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white shrink-0 sm:ml-auto w-full sm:w-auto"
+                        >
+                          💳 Add ₹10 via Razorpay
+                        </Button>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-emerald-400 font-medium flex items-center gap-1">
+                        <span>✓</span> Wallet balance is active. Ready to generate test!
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -378,16 +556,68 @@ export default function CreateTestPage() {
               Next Step
             </Button>
           ) : (
-            <Button onClick={handleGenerate} isLoading={loading} icon={
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            }>
+            <Button
+              onClick={handleGenerate}
+              isLoading={loading}
+              disabled={user?.role === 'STUDENT' && studentTestCount >= 2 && studentBalance < 5}
+              icon={
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              }
+            >
               Generate Test
             </Button>
           )}
         </div>
       </div>
+
+      {/* Mock Razorpay Sandbox Checkout Modal */}
+      {showMockModal && mockDetails && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-700/60 rounded-3xl shadow-2xl p-6 sm:p-8 animate-scale-in text-center">
+            {/* Header */}
+            <div className="flex justify-center mb-4">
+              <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+              </div>
+            </div>
+
+            <h3 className="text-xl font-bold text-white tracking-tight">Razorpay Secure Sandbox</h3>
+            <p className="text-slate-400 text-sm mt-1 mb-6">Unified mock payment integration is active.</p>
+
+            {/* Payment card */}
+            <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-5 mb-6 text-left space-y-3">
+              <div className="flex justify-between text-xs"><span className="text-slate-500">Merchant</span><span className="text-white font-medium">JEsquare Mock Test</span></div>
+              <div className="flex justify-between text-xs"><span className="text-slate-500">Order ID</span><span className="text-indigo-400 font-mono select-all">{mockDetails.orderId}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-slate-500">Selection</span><span className="text-white font-medium">Add Wallet Balance</span></div>
+              <div className="border-t border-slate-800/60 my-2" />
+              <div className="flex justify-between items-baseline"><span className="text-sm text-slate-400">Total Payable</span><span className="text-2xl font-bold text-gradient">₹{mockDetails.amount}</span></div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => { setShowMockModal(false); setMockDetails(null); }}
+                className="flex-1 justify-center order-2 sm:order-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleAuthorizeStudentMockPayment}
+                className="flex-1 justify-center order-1 sm:order-2 bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700"
+              >
+                Authorize Payment
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

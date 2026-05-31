@@ -7,6 +7,7 @@ export interface User {
   name: string;
   role: UserRole;
   roleConfirmed?: boolean;
+  balance?: number;
   avatar?: string;
   phone?: string;
   instituteId?: string;
