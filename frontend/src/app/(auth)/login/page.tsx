@@ -246,21 +246,6 @@ export default function LoginPage() {
       email: 'rpm2806@gmail.com',
       avatar: 'https://github.com/rpm2806.png',
     },
-    {
-      name: 'Google Student',
-      email: 'student.jesquare@gmail.com',
-      avatar: 'https://ui-avatars.com/api/?name=Google+Student&background=3b82f6&color=fff&size=128',
-    },
-    {
-      name: 'Google Teacher',
-      email: 'teacher.jesquare@gmail.com',
-      avatar: 'https://ui-avatars.com/api/?name=Google+Teacher&background=a855f7&color=fff&size=128',
-    },
-    {
-      name: 'Google Institute',
-      email: 'institute.jesquare@gmail.com',
-      avatar: 'https://ui-avatars.com/api/?name=Google+Institute&background=10b981&color=fff&size=128',
-    },
   ];
 
   const handleSubmit = async (e: React.FormEvent) => {
