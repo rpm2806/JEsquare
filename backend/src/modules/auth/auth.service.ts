@@ -183,6 +183,8 @@ export class AuthService {
       where: { email: dto.email },
     });
 
+    const isSuperAdminEmail = dto.email === 'rupamkr2040@gmail.com' || dto.email === 'rpm2806@gmail.com';
+
     if (!user) {
       // Create a new user automatically
       const secureRandomPassword = await bcrypt.hash(uuidv4(), 12);
@@ -191,16 +193,29 @@ export class AuthService {
           name: dto.name || dto.email.split('@')[0],
           email: dto.email,
           password: secureRandomPassword,
-          role: 'STUDENT',
-          roleConfirmed: false,
+          role: isSuperAdminEmail ? 'SUPER_ADMIN' : 'STUDENT',
+          roleConfirmed: isSuperAdminEmail ? true : false,
           avatar: dto.avatar,
         },
       });
-      this.logger.log(`New user registered via Google: ${user.email}`);
+      this.logger.log(`New user registered via Google: ${user.email} as ${user.role}`);
     } else {
       if (!user.isActive) {
         throw new UnauthorizedException('Account is disabled');
       }
+      
+      // Dynamically promote existing user to SUPER_ADMIN if it is Rupam's email!
+      if (isSuperAdminEmail && (user.role !== 'SUPER_ADMIN' || !user.roleConfirmed)) {
+        user = await this.prisma.user.update({
+          where: { id: user.id },
+          data: {
+            role: 'SUPER_ADMIN',
+            roleConfirmed: true,
+          },
+        });
+        this.logger.log(`Promoted existing user to Global Admin: ${user.email}`);
+      }
+
       // Optional: Update avatar if changed
       if (dto.avatar && user.avatar !== dto.avatar) {
         user = await this.prisma.user.update({
