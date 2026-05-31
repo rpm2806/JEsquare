@@ -1,0 +1,393 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS (represented as strings in SQLite) ───
+
+// Role: SUPER_ADMIN, INSTITUTE_ADMIN, TEACHER, STUDENT
+// QuestionType: MCQ, NUMERICAL, MULTI_CORRECT
+// Difficulty: EASY, MEDIUM, HARD
+// TestType: CHAPTER, SUBJECT, FULL_SYLLABUS, CUSTOM
+// AttemptStatus: IN_PROGRESS, SUBMITTED, EVALUATED
+// DoubtStatus: OPEN, AI_ANSWERED, HUMAN_ANSWERED, RESOLVED
+// SubscriptionPlan: FREE, BASIC, PRO, INSTITUTE
+// SubscriptionStatus: ACTIVE, EXPIRED, CANCELLED
+
+// ─── USER & AUTH ───
+
+model User {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  password       String
+  name           String
+  role           String   @default("STUDENT")
+  roleConfirmed  Boolean  @default(false)
+  balance        Float    @default(0.0)
+  phone          String?
+  avatar         String?
+  isActive       Boolean  @default(true)
+  instituteId    String?
+  institute      Institute? @relation("InstituteMembers", fields: [instituteId], references: [id])
+  ownedInstitute Institute? @relation("InstituteOwner")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  sessions       Session[]
+  auditLogs      AuditLog[]
+  createdQuestions Question[]
+  createdTests   Test[]
+  attempts       Attempt[]
+  doubtsAsked    Doubt[]  @relation("StudentDoubts")
+  doubtsSolved   Doubt[]  @relation("SolverDoubts")
+  batchStudents  BatchStudent[]
+
+  @@index([email])
+  @@index([instituteId])
+  @@index([role])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token        String   @unique
+  refreshToken String   @unique
+  ipAddress    String?
+  userAgent    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  action    String
+  entity    String
+  entityId  String?
+  metadata  String?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity, entityId])
+}
+
+// ─── INSTITUTE & BATCHES ───
+
+model Institute {
+  id                 String   @id @default(uuid())
+  name               String
+  slug               String   @unique
+  logo               String?
+  domain             String?
+  brandPrimaryColor  String?  @default("#6366f1")
+  brandSecondaryColor String? @default("#8b5cf6")
+  address            String?
+  phone              String?
+  website            String?
+  subscriptionPlan   String   @default("FREE")
+  subscriptionExpiry DateTime?
+  ownerId            String   @unique
+  owner              User     @relation("InstituteOwner", fields: [ownerId], references: [id])
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  members     User[]       @relation("InstituteMembers")
+  batches     Batch[]
+  questions   Question[]
+  tests       Test[]
+  subscriptions Subscription[]
+
+  @@index([slug])
+  @@index([ownerId])
+}
+
+model Batch {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  instituteId String
+  institute   Institute @relation(fields: [instituteId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  students    BatchStudent[]
+  testBatches TestBatch[]
+
+  @@index([instituteId])
+}
+
+model BatchStudent {
+  id        String   @id @default(uuid())
+  batchId   String
+  batch     Batch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  studentId String
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  joinedAt  DateTime @default(now())
+
+  @@unique([batchId, studentId])
+  @@index([batchId])
+  @@index([studentId])
+}
+
+// ─── QUESTION BANK ───
+
+model Subject {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  chapters  Chapter[]
+  questions Question[]
+}
+
+model Chapter {
+  id        String   @id @default(uuid())
+  name      String
+  subjectId String
+  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  topics    Topic[]
+  questions Question[]
+
+  @@index([subjectId])
+}
+
+model Topic {
+  id        String   @id @default(uuid())
+  name      String
+  chapterId String
+  chapter   Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  questions Question[]
+
+  @@index([chapterId])
+}
+
+model Question {
+  id             String   @id @default(uuid())
+  code           String?  @unique
+  type           String   @default("MCQ")
+  text           String
+  optionA        String?
+  optionB        String?
+  optionC        String?
+  optionD        String?
+  correctAnswer  String
+  numericalAnswer Float?
+  difficulty     String   @default("MEDIUM")
+  subjectId      String
+  subject        Subject  @relation(fields: [subjectId], references: [id])
+  chapterId      String
+  chapter        Chapter  @relation(fields: [chapterId], references: [id])
+  topicId        String?
+  topic          Topic?   @relation(fields: [topicId], references: [id])
+  solution       String?
+  solutionImage  String?
+  questionImage  String?
+  instituteId    String?
+  institute      Institute? @relation(fields: [instituteId], references: [id])
+  createdById    String
+  createdBy      User     @relation(fields: [createdById], references: [id])
+  isVerified     Boolean  @default(false)
+  flagCount      Int      @default(0)
+  source         String?
+  year           Int?
+  tags           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  testQuestions  TestQuestion[]
+  answers        Answer[]
+
+  @@index([subjectId, chapterId, difficulty])
+  @@index([type])
+  @@index([instituteId])
+  @@index([createdById])
+  @@index([isVerified])
+}
+
+// ─── TEST MANAGEMENT ───
+
+model Test {
+  id               String   @id @default(uuid())
+  title            String
+  description      String?
+  type             String   @default("CUSTOM")
+  duration         Int      @default(180)
+  totalMarks       Float    @default(0)
+  negativeMarking  Float    @default(0)
+  shuffleQuestions Boolean  @default(false)
+  isPublished      Boolean  @default(false)
+  startTime        DateTime?
+  endTime          DateTime?
+  instituteId      String?
+  institute        Institute? @relation(fields: [instituteId], references: [id])
+  createdById      String
+  createdBy        User     @relation(fields: [createdById], references: [id])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  sections     TestSection[]
+  questions    TestQuestion[]
+  attempts     Attempt[]
+  testBatches  TestBatch[]
+
+  @@index([instituteId])
+  @@index([createdById])
+  @@index([isPublished])
+}
+
+model TestSection {
+  id                      String @id @default(uuid())
+  testId                  String
+  test                    Test   @relation(fields: [testId], references: [id], onDelete: Cascade)
+  name                    String
+  order                   Int    @default(0)
+  maxQuestions            Int?
+  marksPerQuestion        Float  @default(4)
+  negativeMarksPerQuestion Float @default(1)
+
+  questions TestQuestion[]
+
+  @@index([testId])
+}
+
+model TestQuestion {
+  id          String      @id @default(uuid())
+  testId      String
+  test        Test        @relation(fields: [testId], references: [id], onDelete: Cascade)
+  sectionId   String?
+  section     TestSection? @relation(fields: [sectionId], references: [id])
+  questionId  String
+  question    Question    @relation(fields: [questionId], references: [id])
+  order       Int         @default(0)
+
+  @@unique([testId, questionId])
+  @@index([testId])
+  @@index([sectionId])
+}
+
+model TestBatch {
+  id      String @id @default(uuid())
+  testId  String
+  test    Test   @relation(fields: [testId], references: [id], onDelete: Cascade)
+  batchId String
+  batch   Batch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([testId, batchId])
+}
+
+// ─── ATTEMPTS & ANSWERS ───
+
+model Attempt {
+  id              String   @id @default(uuid())
+  testId          String
+  test            Test     @relation(fields: [testId], references: [id])
+  studentId       String
+  student         User     @relation(fields: [studentId], references: [id])
+  startedAt       DateTime @default(now())
+  submittedAt     DateTime?
+  score           Float?
+  totalCorrect    Int?
+  totalWrong      Int?
+  totalSkipped    Int?
+  totalAttempted  Int?
+  percentile      Float?
+  timeTaken       Int?
+  tabSwitchCount  Int      @default(0)
+  copyPasteCount  Int      @default(0)
+  status          String   @default("IN_PROGRESS")
+  createdAt       DateTime @default(now())
+
+  // Relations
+  answers Answer[]
+
+  @@index([testId])
+  @@index([studentId])
+  @@index([status])
+}
+
+model Answer {
+  id               String   @id @default(uuid())
+  attemptId        String
+  attempt          Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId       String
+  question         Question @relation(fields: [questionId], references: [id])
+  selectedOption   String?
+  numericalAnswer  Float?
+  isCorrect        Boolean?
+  marksAwarded     Float?
+  timeTaken        Int?
+  isMarkedForReview Boolean @default(false)
+  isVisited        Boolean  @default(false)
+  answeredAt       DateTime?
+
+  @@unique([attemptId, questionId])
+  @@index([attemptId])
+  @@index([questionId])
+}
+
+// ─── SUBSCRIPTIONS ───
+
+model Subscription {
+  id          String   @id @default(uuid())
+  instituteId String?
+  institute   Institute? @relation(fields: [instituteId], references: [id])
+  plan        String   @default("FREE")
+  amount      Float    @default(0)
+  currency    String   @default("INR")
+  startDate   DateTime @default(now())
+  endDate     DateTime?
+  status      String   @default("ACTIVE")
+  paymentId   String?
+  features    String?
+  createdAt   DateTime @default(now())
+
+  @@index([instituteId])
+  @@index([status])
+}
+
+// ─── DOUBT MARKETPLACE ───
+
+model Doubt {
+  id              String   @id @default(uuid())
+  studentId       String
+  student         User     @relation("StudentDoubts", fields: [studentId], references: [id])
+  questionText    String
+  questionImage   String?
+  subject         String?
+  chapter         String?
+  status          String   @default("OPEN")
+  aiResponse      String?
+  assignedSolverId String?
+  assignedSolver  User?    @relation("SolverDoubts", fields: [assignedSolverId], references: [id])
+  solverResponse  String?
+  rating          Int?
+  payment         Float?
+  createdAt       DateTime @default(now())
+  resolvedAt      DateTime?
+
+  @@index([studentId])
+  @@index([assignedSolverId])
+  @@index([status])
+}

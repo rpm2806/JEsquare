@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database (for production)
+  postgres:
+    image: postgres:16-alpine
+    container_name: jee-saas-db
+    environment:
+      POSTGRES_USER: jee_admin
+      POSTGRES_PASSWORD: jee_secret_2024
+      POSTGRES_DB: jee_saas
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jee_admin -d jee_saas"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: jee-saas-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: jee-saas-backend
+    ports:
+      - "4000:4000"
+    environment:
+      DATABASE_URL: "postgresql://jee_admin:jee_secret_2024@postgres:5432/jee_saas?schema=public"
+      JWT_SECRET: "${JWT_SECRET}"
+      JWT_REFRESH_SECRET: "${JWT_REFRESH_SECRET}"
+      JWT_EXPIRATION: "15m"
+      JWT_REFRESH_EXPIRATION: "7d"
+      PORT: 4000
+      FRONTEND_URL: "http://localhost"
+      REDIS_URL: "redis://redis:6379"
+      GEMINI_API_KEY: "${GEMINI_API_KEY}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - backend_uploads:/app/uploads
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: jee-saas-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: "/api"
+      NEXT_PUBLIC_APP_NAME: "JEE TestGen Pro"
+    depends_on:
+      - backend
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: jee-saas-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_uploads:
