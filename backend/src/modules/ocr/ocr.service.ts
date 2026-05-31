@@ -101,13 +101,87 @@ export class OcrService {
     return jobId;
   }
 
+  private async uploadToFileApi(
+    fileBuffer: Buffer,
+    mimeType: string,
+    filename: string,
+    apiKey: string,
+  ): Promise<string> {
+    const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`;
+    const metadata = JSON.stringify({
+      file: {
+        displayName: filename || 'Ingested Document',
+      },
+    });
+
+    const boundary = 'gemini_file_boundary_unique';
+    const bodyParts = [
+      `--${boundary}\r\n`,
+      `Content-Type: application/json; charset=UTF-8\r\n\r\n`,
+      `${metadata}\r\n`,
+      `--${boundary}\r\n`,
+      `Content-Type: ${mimeType}\r\n\r\n`,
+    ];
+
+    const bodyBuffer = Buffer.concat([
+      Buffer.from(bodyParts.join('')),
+      fileBuffer,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+
+    const response = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body: bodyBuffer,
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Gemini File API Upload failed: ${response.status} ${response.statusText} - ${errText}`);
+    }
+
+    const resData = await response.json();
+    const uri = resData.file?.uri;
+    if (!uri) {
+      throw new Error('Gemini File API returned an empty file URI.');
+    }
+
+    this.logger.log(`Uploaded file to Gemini File API successfully: ${uri}`);
+    return uri;
+  }
+
+  private async deleteFromFileApi(fileUri: string, apiKey: string): Promise<void> {
+    try {
+      const url = `${fileUri}?key=${apiKey}`;
+      const response = await fetch(url, {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        this.logger.log(`Deleted file from Gemini File API: ${fileUri}`);
+      } else {
+        const errText = await response.text();
+        this.logger.warn(`Failed to delete file from Gemini File API: ${response.status} - ${errText}`);
+      }
+    } catch (err) {
+      this.logger.warn(`Error deleting file from Gemini File API:`, err);
+    }
+  }
+
   private async runBackgroundIngestion(jobId: string, fileBuffer: Buffer, mimeType: string, filename: string) {
     const job = this.jobs.get(jobId);
     if (!job) return;
 
     job.status = 'PROCESSING';
+    const apiKey = process.env.GEMINI_API_KEY;
+    let fileUri: string | undefined;
 
     try {
+      if (apiKey) {
+        fileUri = await this.uploadToFileApi(fileBuffer, mimeType, filename, apiKey);
+      }
+
       const allQuestions: ExtractedQuestion[] = [];
       const subjects = await this.prisma.subject.findMany({ include: { chapters: true } });
 
@@ -119,7 +193,9 @@ export class OcrService {
           mimeType,
           page,
           filename,
-          subjects
+          subjects,
+          fileUri,
+          apiKey
         );
 
         if (pageRes.bookDetected && pageRes.bookDetected !== filename) {
@@ -135,7 +211,6 @@ export class OcrService {
         job.processedPages = page;
         job.progress = Math.round((page / job.totalPages) * 100);
 
-        // Throttle requests: sleep 4 seconds between pages to respect rate limits (Gemini 15 RPM cap)
         if (page < job.totalPages) {
           await new Promise((resolve) => setTimeout(resolve, 4000));
         }
@@ -147,6 +222,10 @@ export class OcrService {
       this.logger.error(`Job ${jobId}: Ingestion failed. Error:`, err);
       job.status = 'FAILED';
       job.error = err.message || 'Unknown processing failure';
+    } finally {
+      if (fileUri && apiKey) {
+        await this.deleteFromFileApi(fileUri, apiKey);
+      }
     }
   }
 
@@ -155,18 +234,17 @@ export class OcrService {
     mimeType: string,
     pageNumber: number,
     filename: string,
-    subjects: any[]
+    subjects: any[],
+    fileUri?: string,
+    apiKey?: string
   ): Promise<{ bookDetected: string; questions: ExtractedQuestion[] }> {
-    const apiKey = process.env.GEMINI_API_KEY;
-
     const defaultSubjectId = subjects[0]?.id || 'default-subj';
     const defaultChapterId = subjects[0]?.chapters?.[0]?.id || 'default-chap';
 
     if (apiKey) {
       try {
-        const base64Data = fileBuffer.toString('base64');
         const prompt = `You are an elite JEE Main/Advanced test preparation expert.
-Analyze the entire document buffer, but ONLY extract and return questions found on Page ${pageNumber} of the document.
+Analyze the entire document, but ONLY extract and return questions found on Page ${pageNumber} of the document.
 For each question:
 1. Extract the full question text. Convert all math symbols, variables, and formulas to LaTeX ($...$ for inline, $$...$$ for block).
 2. Determine the question type: 'MCQ', 'NUMERICAL', or 'MULTI_CORRECT'.
@@ -184,17 +262,26 @@ Return the result strictly as JSON conforming to the requested schema.`;
 
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
+        const contentPart = fileUri
+          ? {
+              fileData: {
+                mimeType,
+                fileUri,
+              },
+            }
+          : {
+              inlineData: {
+                mimeType,
+                data: fileBuffer.toString('base64'),
+              },
+            };
+
         const payload = {
           contents: [
             {
               parts: [
                 { text: prompt },
-                {
-                  inlineData: {
-                    mimeType,
-                    data: base64Data,
-                  },
-                },
+                contentPart,
               ],
             },
           ],
@@ -292,7 +379,8 @@ Return the result strictly as JSON conforming to the requested schema.`;
           questions: processedQuestions,
         };
       } catch (err) {
-        this.logger.error(`Page ${pageNumber} live extraction failed, falling back:`, err);
+        this.logger.error(`Page ${pageNumber} live extraction failed:`, err);
+        throw err;
       }
     }
 
