@@ -19,8 +19,8 @@ export default function LoginPage() {
   
   // Custom interactive Google Sign-in simulation states
   const [showGoogleModal, setShowGoogleModal] = useState(false);
-  const [googleName, setGoogleName] = useState('Rupam Kumar');
-  const [googleEmail, setGoogleEmail] = useState('rupam@jeesaas.com');
+  const [googleName, setGoogleName] = useState('');
+  const [googleEmail, setGoogleEmail] = useState('');
   const [googleAvatar, setGoogleAvatar] = useState('https://lh3.googleusercontent.com/a/default-user');
 
   const { login } = useAuthStore();
@@ -256,7 +256,7 @@ export default function LoginPage() {
               <Input
                 label="Full Name"
                 type="text"
-                placeholder="Rupam Kumar"
+                placeholder="Enter your name"
                 value={googleName}
                 onChange={(e) => setGoogleName(e.target.value)}
                 required
@@ -264,7 +264,7 @@ export default function LoginPage() {
               <Input
                 label="Google Email"
                 type="email"
-                placeholder="rupam@gmail.com"
+                placeholder="your.email@gmail.com"
                 value={googleEmail}
                 onChange={(e) => setGoogleEmail(e.target.value)}
                 required
