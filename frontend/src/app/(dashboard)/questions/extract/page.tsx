@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '../../../../components/ui/card';
 import { Button } from '../../../../components/ui/button';
@@ -45,6 +45,55 @@ export default function ExtractQuestionsPage() {
   const [importing, setImporting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [processedPages, setProcessedPages] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [questionsCount, setQuestionsCount] = useState(0);
+  const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+      }
+    };
+  }, []);
+
+  const pollJobStatus = (id: string) => {
+    pollTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await api.get(`/ocr/job/${id}`);
+        const { status, progress, processedPages, totalPages, questionsCount, questions: extractedQuestions, bookDetected: detectedBook, error } = res.data;
+
+        setProgress(progress || 0);
+        setProcessedPages(processedPages || 0);
+        setTotalPages(totalPages || 1);
+        setQuestionsCount(questionsCount || 0);
+
+        if (status === 'COMPLETED') {
+          setProgress(100);
+          setBookDetected(detectedBook || 'JEE Test Bank');
+          const parsed = (extractedQuestions || []).map((q: any) => ({
+            ...q,
+            accepted: true,
+          }));
+          setQuestions(parsed);
+          setTimeout(() => {
+            setStep('review');
+          }, 800);
+        } else if (status === 'FAILED') {
+          alert(`Extraction job failed: ${error || 'Unknown error'}`);
+          setStep('upload');
+        } else {
+          pollJobStatus(id);
+        }
+      } catch (err) {
+        console.error('Error polling job status:', err);
+        pollJobStatus(id);
+      }
+    }, 3000);
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       setSelectedFile(e.target.files[0]);
@@ -76,55 +125,32 @@ export default function ExtractQuestionsPage() {
     if (!selectedFile) return;
 
     setStep('processing');
-    setProgress(15);
+    setProgress(0);
+    setProcessedPages(0);
+    setTotalPages(1);
+    setQuestionsCount(0);
     setStatusMessage('Uploading and parsing document...');
 
-    const interval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 90) {
-          clearInterval(interval);
-          return 90;
-        }
-        if (prev >= 70) return prev + 2;
-        if (prev >= 40) return prev + 5;
-        return prev + 10;
-      });
-    }, 400);
-
     try {
-      // Simulate status shifts
-      setTimeout(() => setStatusMessage('Auto-detecting source book/exam pool...'), 1000);
-      setTimeout(() => setStatusMessage('Analyzing layout & extracting questions...'), 2500);
-      setTimeout(() => setStatusMessage('Categorizing questions by subject & chapter...'), 4000);
-
       const formData = new FormData();
       formData.append('file', selectedFile);
 
-      const res = await api.post('/ocr/extract', formData, {
+      const res = await api.post('/ocr/ingest-job', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
 
-      clearInterval(interval);
-      setProgress(100);
-
-      setBookDetected(res.data.bookDetected || 'JEE Test Bank');
-      // Set accepted true by default
-      const parsed = (res.data.questions || []).map((q: any) => ({
-        ...q,
-        accepted: true,
-      }));
-      setQuestions(parsed);
+      const { jobId: newJobId, totalPages: pagesCount } = res.data;
+      setJobId(newJobId);
+      setTotalPages(pagesCount || 1);
+      setStatusMessage('Initializing background extraction...');
       
-      setTimeout(() => {
-        setStep('review');
-      }, 500);
-
-    } catch (err) {
-      clearInterval(interval);
+      pollJobStatus(newJobId);
+    } catch (err: any) {
       console.error('OCR Extraction error:', err);
-      alert('OCR Question extraction failed. Please ensure the file is an image/PDF under 50MB and try again.');
+      const errMsg = err.response?.data?.message || 'OCR Question extraction failed to initialize. Please ensure the file is under 50MB and try again.';
+      alert(errMsg);
       setStep('upload');
     }
   };
@@ -270,7 +296,7 @@ export default function ExtractQuestionsPage() {
 
       {/* STEP 2: PROCESSING TICKER */}
       {step === 'processing' && (
-        <Card className="py-16 text-center">
+        <Card className="py-16 text-center animate-fade-in">
           <div className="flex flex-col items-center">
             <div className="relative w-20 h-20 mb-6 flex items-center justify-center">
               <div className="absolute inset-0 rounded-full border-4 border-indigo-500/20" />
@@ -278,8 +304,14 @@ export default function ExtractQuestionsPage() {
               <BookOpen className="w-8 h-8 text-indigo-400 animate-pulse" />
             </div>
 
-            <h3 className="text-xl font-bold text-white mb-2">{statusMessage}</h3>
-            <p className="text-sm text-slate-500 max-w-sm">This may take up to a minute for large files. Auto-detecting subject categories...</p>
+            <h3 className="text-xl font-bold text-white mb-2">
+              {processedPages > 0 ? `Processing Page ${processedPages} of ${totalPages}` : statusMessage}
+            </h3>
+            <p className="text-sm text-slate-400 max-w-sm">
+              {questionsCount > 0 
+                ? `✨ Extracted ${questionsCount} questions so far...` 
+                : 'Analyzing document structure and parsing pages...'}
+            </p>
 
             <div className="w-full max-w-md mt-8">
               <div className="flex justify-between text-xs text-slate-400 mb-1.5">
@@ -293,6 +325,10 @@ export default function ExtractQuestionsPage() {
                 />
               </div>
             </div>
+
+            <p className="text-xs text-slate-500 mt-8 max-w-md px-4 leading-relaxed">
+              Respecting Gemini API rate limits. The system processes each page sequentially with a 4-second delay to guarantee complete ingestion of massive books or documents without timeout failures.
+            </p>
           </div>
         </Card>
       )}

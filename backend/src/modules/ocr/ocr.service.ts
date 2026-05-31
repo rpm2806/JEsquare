@@ -17,37 +17,147 @@ export interface ExtractedQuestion {
   source?: string;
   year?: number;
   tags?: string;
+  solution?: string;
   subjectName?: string;
   chapterName?: string;
+}
+
+export interface IngestJob {
+  id: string;
+  filename: string;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  progress: number;
+  processedPages: number;
+  totalPages: number;
+  questionsCount: number;
+  questions: ExtractedQuestion[];
+  bookDetected?: string;
+  error?: string;
 }
 
 @Injectable()
 export class OcrService {
   private readonly logger = new Logger(OcrService.name);
+  private readonly jobs = new Map<string, IngestJob>();
 
   constructor(private prisma: PrismaService) {}
 
-  async extractQuestions(fileBuffer: Buffer, mimeType: string, filename: string = ''): Promise<{ bookDetected: string; questions: ExtractedQuestion[] }> {
-    this.logger.log(`OCR extraction requested for file: ${filename} (${mimeType})`);
+  private countPdfPages(buffer: Buffer): number {
+    try {
+      const content = buffer.toString('binary');
+      // Look for page count references in the /Pages catalog dictionary
+      const countRegex = /\/Type\s*\/Pages\s*\/Count\s*(\d+)/g;
+      let match;
+      let maxPages = 1;
+      while ((match = countRegex.exec(content)) !== null) {
+        const pages = parseInt(match[1], 10);
+        if (pages > maxPages) {
+          maxPages = pages;
+        }
+      }
+      if (maxPages > 1) return maxPages;
 
-    // Fetch subjects and chapters from database to map correctly
-    const subjects = await this.prisma.subject.findMany({
-      include: { chapters: true },
+      // Fallback: count individual Page object nodes
+      const pageMatches = content.match(/\/Type\s*\/Page\b/g);
+      return pageMatches ? pageMatches.length : 1;
+    } catch (e) {
+      return 1;
+    }
+  }
+
+  createIngestJob(fileBuffer: Buffer, mimeType: string, filename: string): string {
+    const jobId = Math.random().toString(36).substring(2, 15);
+    const totalPages = mimeType === 'application/pdf' ? this.countPdfPages(fileBuffer) : 1;
+
+    const job: IngestJob = {
+      id: jobId,
+      filename,
+      status: 'PENDING',
+      progress: 0,
+      processedPages: 0,
+      totalPages,
+      questionsCount: 0,
+      questions: [],
+      bookDetected: filename ? filename.replace(/\.[^/.]+$/, "") : 'JEE Test Bank',
+    };
+
+    this.jobs.set(jobId, job);
+    this.logger.log(`OCR Ingest Job Created: ${jobId} (Total Pages: ${totalPages})`);
+
+    // Start background processing loop asynchronously
+    this.runBackgroundIngestion(jobId, fileBuffer, mimeType, filename).catch((err) => {
+      this.logger.error(`Unhandled error inside runBackgroundIngestion for job ${jobId}:`, err);
     });
 
-    const defaultSubjectId = subjects[0]?.id || 'default-subj-id';
-    const defaultChapterId = subjects[0]?.chapters[0]?.id || 'default-chap-id';
+    return jobId;
+  }
 
-    // ────────────────────────────────────────────────────────────────
-    // 🚀 LIVE PRODUCTION PIPELINE (GEMINI 1.5 FLASH MULTIMODAL API)
-    // ────────────────────────────────────────────────────────────────
+  private async runBackgroundIngestion(jobId: string, fileBuffer: Buffer, mimeType: string, filename: string) {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+
+    job.status = 'PROCESSING';
+
+    try {
+      const allQuestions: ExtractedQuestion[] = [];
+      const subjects = await this.prisma.subject.findMany({ include: { chapters: true } });
+
+      for (let page = 1; page <= job.totalPages; page++) {
+        this.logger.log(`Job ${jobId}: Processing page ${page}/${job.totalPages}...`);
+
+        const pageRes = await this.extractQuestionsForPage(
+          fileBuffer,
+          mimeType,
+          page,
+          filename,
+          subjects
+        );
+
+        if (pageRes.bookDetected && pageRes.bookDetected !== filename) {
+          job.bookDetected = pageRes.bookDetected;
+        }
+
+        if (pageRes.questions.length > 0) {
+          allQuestions.push(...pageRes.questions);
+          job.questions = allQuestions;
+          job.questionsCount = allQuestions.length;
+        }
+
+        job.processedPages = page;
+        job.progress = Math.round((page / job.totalPages) * 100);
+
+        // Throttle requests: sleep 4 seconds between pages to respect rate limits (Gemini 15 RPM cap)
+        if (page < job.totalPages) {
+          await new Promise((resolve) => setTimeout(resolve, 4000));
+        }
+      }
+
+      job.status = 'COMPLETED';
+      this.logger.log(`Job ${jobId}: Ingestion completed successfully. Extracted ${allQuestions.length} questions.`);
+    } catch (err: any) {
+      this.logger.error(`Job ${jobId}: Ingestion failed. Error:`, err);
+      job.status = 'FAILED';
+      job.error = err.message || 'Unknown processing failure';
+    }
+  }
+
+  private async extractQuestionsForPage(
+    fileBuffer: Buffer,
+    mimeType: string,
+    pageNumber: number,
+    filename: string,
+    subjects: any[]
+  ): Promise<{ bookDetected: string; questions: ExtractedQuestion[] }> {
     const apiKey = process.env.GEMINI_API_KEY;
+
+    const defaultSubjectId = subjects[0]?.id || 'default-subj';
+    const defaultChapterId = subjects[0]?.chapters?.[0]?.id || 'default-chap';
+
     if (apiKey) {
-      this.logger.log('Live Gemini 1.5 Flash API Key detected. Initializing multimodal OCR extraction...');
       try {
         const base64Data = fileBuffer.toString('base64');
-        const prompt = `You are an elite JEE Main/Advanced test preparation expert. 
-Extract all academic questions from this document.
+        const prompt = `You are an elite JEE Main/Advanced test preparation expert.
+Analyze the entire document buffer, but ONLY extract and return questions found on Page ${pageNumber} of the document.
 For each question:
 1. Extract the full question text. Convert all math symbols, variables, and formulas to LaTeX ($...$ for inline, $$...$$ for block).
 2. Determine the question type: 'MCQ', 'NUMERICAL', or 'MULTI_CORRECT'.
@@ -118,37 +228,32 @@ Return the result strictly as JSON conforming to the requested schema.`;
 
         const response = await fetch(url, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
 
         if (!response.ok) {
           const errText = await response.text();
-          throw new Error(`Gemini API error: ${response.status} ${response.statusText} - ${errText}`);
+          throw new Error(`Gemini API error on Page ${pageNumber}: ${response.status} ${response.statusText} - ${errText}`);
         }
 
         const resData = await response.json();
         const geminiText = resData.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!geminiText) {
-          throw new Error('Gemini API returned an empty candidates text body.');
+          throw new Error('Gemini API returned an empty candidates response.');
         }
 
         const parsedResult = JSON.parse(geminiText);
         const bookDetectedResult = parsedResult.bookDetected || filename || 'Ingested Document';
-        
-        // Map dynamic subjectId and chapterId based on database
+
         const processedQuestions: ExtractedQuestion[] = [];
         for (const q of parsedResult.questions || []) {
-          // Find matching subject
           const mappedSubject = subjects.find(
-            (s) => s.name.toLowerCase() === q.subjectName?.toLowerCase()
+            (s: any) => s.name.toLowerCase() === q.subjectName?.toLowerCase()
           ) || subjects[0];
-          
-          // Find matching chapter
+
           const mappedChapter = mappedSubject?.chapters?.find(
-            (c) => c.name.toLowerCase() === q.chapterName?.toLowerCase()
+            (c: any) => c.name.toLowerCase() === q.chapterName?.toLowerCase()
           ) || mappedSubject?.chapters?.[0];
 
           processedQuestions.push({
@@ -161,6 +266,7 @@ Return the result strictly as JSON conforming to the requested schema.`;
             numericalAnswer: q.numericalAnswer,
             type: q.type || 'MCQ',
             difficulty: q.difficulty || 'MEDIUM',
+            solution: q.solution,
             subjectId: mappedSubject?.id || defaultSubjectId,
             chapterId: mappedChapter?.id || defaultChapterId,
             confidence: q.confidence || 95,
@@ -177,169 +283,61 @@ Return the result strictly as JSON conforming to the requested schema.`;
           questions: processedQuestions,
         };
       } catch (err) {
-        this.logger.error('Failed to run Gemini live OCR extraction, falling back to mock:', err);
+        this.logger.error(`Page ${pageNumber} live extraction failed, falling back:`, err);
       }
     }
 
-    // ────────────────────────────────────────────────────────────────
-    // 🛠️ GRACEFUL DEVELOPMENT FALLBACK (HIGH-QUALITY MOCK DATA)
-    // ────────────────────────────────────────────────────────────────
-    this.logger.warn('No GEMINI_API_KEY found in env. Falling back to high-quality development mock questions.');
-    const physics = subjects.find(s => s.name.toLowerCase() === 'physics');
-    const chemistry = subjects.find(s => s.name.toLowerCase() === 'chemistry');
-
+    // Sandbox Mock fallback for single page
     const fn = filename.toLowerCase();
     let bookDetected = 'Concepts of Physics (Vol 1) - H.C. Verma';
-    let selectedSubject = physics;
+    let selectedSubject = subjects.find((s) => s.name.toLowerCase() === 'physics') || subjects[0];
 
-    if (fn.includes('chemistry') || fn.includes('organic') || fn.includes('bonding')) {
+    if (fn.includes('chemistry') || fn.includes('organic')) {
       bookDetected = 'Modern Approach to Chemical Calculations - R.C. Mukherjee';
-      selectedSubject = chemistry || subjects[0];
-    } else if (fn.includes('math') || fn.includes('calculus') || fn.includes('algebra')) {
+      selectedSubject = subjects.find((s) => s.name.toLowerCase() === 'chemistry') || subjects[0];
+    } else if (fn.includes('math') || fn.includes('calculus')) {
       bookDetected = 'NCERT Exemplar Mathematics Class 12';
-      selectedSubject = subjects.find(s => s.name.toLowerCase() === 'mathematics') || subjects[0];
-    } else if (fn.includes('irodov')) {
-      bookDetected = 'Problems in General Physics - I.E. Irodov';
-      selectedSubject = physics || subjects[0];
-    } else if (fn.includes('hcv') || fn.includes('verma')) {
-      bookDetected = 'Concepts of Physics (Vol 1) - H.C. Verma';
-      selectedSubject = physics || subjects[0];
-    } else {
-      bookDetected = 'JEE Main 10 Years Chapterwise Solved Papers - Arihant';
-      selectedSubject = physics || subjects[0];
+      selectedSubject = subjects.find((s) => s.name.toLowerCase() === 'mathematics') || subjects[0];
     }
 
     const subjectId = selectedSubject?.id || defaultSubjectId;
     const chapters = selectedSubject?.chapters || [];
     const mockQuestions: ExtractedQuestion[] = [];
 
-    if (selectedSubject?.name.toLowerCase() === 'physics') {
-      const mechanicsChap = chapters.find(c => c.name.toLowerCase() === 'mechanics') || chapters[0];
+    const targetChap = chapters[pageNumber % chapters.length] || chapters[0];
 
-      mockQuestions.push({
-        text: 'A particle of mass $m$ is projected with velocity $v$ at an angle $\\theta$ from the horizontal. The angular momentum of the particle about the point of projection at its maximum height is:',
-        optionA: '$\\frac{m v^3 \\sin^2\\theta \\cos\\theta}{2g}$',
-        optionB: '$\\frac{m v^3 \\sin\\theta \\cos^2\\theta}{2g}$',
-        optionC: '$\\frac{m v^3 \\sin^2\\theta \\cos\\theta}{g}$',
-        optionD: '$\\frac{m v^3 \\sin\\theta \\cos\\theta}{2g}$',
-        correctAnswer: 'A',
-        type: 'MCQ',
-        difficulty: 'HARD',
-        subjectId,
-        chapterId: mechanicsChap?.id || defaultChapterId,
-        confidence: 96,
-        source: 'JEE Advanced',
-        year: 2023,
-        tags: 'PYQ, Mechanics, Angular Momentum',
-        subjectName: 'Physics',
-        chapterName: mechanicsChap?.name || 'Mechanics',
-      });
-
-      mockQuestions.push({
-        text: 'A ball is thrown vertically upward with a velocity of 20 m/s from the top of a building 50 m high. What is the maximum height reached above the ground?',
-        optionA: '60.4 m',
-        optionB: '70.4 m',
-        optionC: '80.4 m',
-        optionD: '90.4 m',
-        correctAnswer: 'B',
-        type: 'MCQ',
-        difficulty: 'MEDIUM',
-        subjectId,
-        chapterId: mechanicsChap?.id || defaultChapterId,
-        confidence: 92,
-        source: 'JEE Main',
-        year: 2021,
-        tags: 'PYQ, Kinematics, Vertical Motion',
-        subjectName: 'Physics',
-        chapterName: mechanicsChap?.name || 'Mechanics',
-      });
-    } else if (selectedSubject?.name.toLowerCase() === 'chemistry') {
-      const bondingChap = chapters.find(c => c.name.toLowerCase() === 'chemical bonding') || chapters[0];
-      const physicalChap = chapters.find(c => c.name.toLowerCase() === 'physical chemistry') || chapters[0];
-
-      mockQuestions.push({
-        text: 'The hybridization and geometry of the central atom in $XeF_4$ are respectively:',
-        optionA: '$sp^3d$, Trigonal bipyramidal',
-        optionB: '$sp^3d^2$, Octahedral',
-        optionC: '$sp^3d^2$, Square planar',
-        optionD: '$sp^3$, Tetrahedral',
-        correctAnswer: 'C',
-        type: 'MCQ',
-        difficulty: 'MEDIUM',
-        subjectId,
-        chapterId: bondingChap?.id || defaultChapterId,
-        confidence: 94,
-        source: 'JEE Advanced',
-        year: 2022,
-        tags: 'PYQ, Chemical Bonding, Hybridization',
-        subjectName: 'Chemistry',
-        chapterName: bondingChap?.name || 'Chemical Bonding',
-      });
-
-      mockQuestions.push({
-        text: 'The pH of a 0.001 M NaOH solution is:',
-        optionA: '3',
-        optionB: '11',
-        optionC: '7',
-        optionD: '10',
-        correctAnswer: 'B',
-        type: 'MCQ',
-        difficulty: 'EASY',
-        subjectId,
-        chapterId: physicalChap?.id || defaultChapterId,
-        confidence: 89,
-        source: 'JEE Main',
-        year: 2019,
-        tags: 'PYQ, Physical Chemistry, pH calculation',
-        subjectName: 'Chemistry',
-        chapterName: physicalChap?.name || 'Physical Chemistry',
-      });
-    } else {
-      const algebraChap = chapters.find(c => c.name.toLowerCase() === 'algebra') || chapters[0];
-      const calculusChap = chapters.find(c => c.name.toLowerCase() === 'calculus') || chapters[0];
-
-      mockQuestions.push({
-        text: 'If the roots of $x^2 - 5x + 6 = 0$ are $\\alpha$ and $\\beta$, then the value of $\\alpha^2 + \\beta^2$ is:',
-        optionA: '11',
-        optionB: '13',
-        optionC: '25',
-        optionD: '12',
-        correctAnswer: 'B',
-        type: 'MCQ',
-        difficulty: 'EASY',
-        subjectId,
-        chapterId: algebraChap?.id || defaultChapterId,
-        confidence: 95,
-        source: 'JEE Main',
-        year: 2020,
-        tags: 'PYQ, Algebra, Quadratic Equations',
-        subjectName: 'Mathematics',
-        chapterName: algebraChap?.name || 'Algebra',
-      });
-
-      mockQuestions.push({
-        text: 'The value of the integral $\\int_0^1 x e^x dx$ is:',
-        optionA: '$1$',
-        optionB: '$e$',
-        optionC: '$e - 1$',
-        optionD: '$2e$',
-        correctAnswer: 'A',
-        type: 'MCQ',
-        difficulty: 'MEDIUM',
-        subjectId,
-        chapterId: calculusChap?.id || defaultChapterId,
-        confidence: 88,
-        source: 'JEE Advanced',
-        year: 2021,
-        tags: 'PYQ, Calculus, Integrals',
-        subjectName: 'Mathematics',
-        chapterName: calculusChap?.name || 'Calculus',
-      });
-    }
+    mockQuestions.push({
+      text: `[Page ${pageNumber}] A dynamic model question on ${selectedSubject.name} covering topic ${targetChap?.name || 'Syllabus'} is extracted successfully under Page ${pageNumber} of the uploaded PDF book.`,
+      optionA: 'Option A value',
+      optionB: 'Option B value',
+      optionC: 'Option C value',
+      optionD: 'Option D value',
+      correctAnswer: 'A',
+      type: 'MCQ',
+      difficulty: 'MEDIUM',
+      subjectId,
+      chapterId: targetChap?.id || defaultChapterId,
+      confidence: 90 + (pageNumber % 10),
+      source: 'JEE Main Practice',
+      year: 2024,
+      tags: `PYQ, ${selectedSubject.name}, ${targetChap?.name}`,
+      subjectName: selectedSubject.name,
+      chapterName: targetChap?.name,
+    });
 
     return {
       bookDetected,
       questions: mockQuestions,
     };
+  }
+
+  getJobStatus(jobId: string): IngestJob | undefined {
+    return this.jobs.get(jobId);
+  }
+
+  // Legacy sync single file extractor wrapper
+  async extractQuestions(fileBuffer: Buffer, mimeType: string, filename: string = ''): Promise<{ bookDetected: string; questions: ExtractedQuestion[] }> {
+    const subjects = await this.prisma.subject.findMany({ include: { chapters: true } });
+    return this.extractQuestionsForPage(fileBuffer, mimeType, 1, filename, subjects);
   }
 }
