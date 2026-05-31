@@ -32,33 +32,18 @@ interface ExtractedQuestion {
 
 type UploadStep = 'upload' | 'processing' | 'review';
 
-interface ActiveJob {
-  jobId: string;
-  filename: string;
-  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
-  progress: number;
-  processedPages: number;
-  totalPages: number;
-  questionsCount: number;
-  error?: string;
-  questions?: ExtractedQuestion[];
-}
-
 export default function ExtractQuestionsPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<UploadStep>('upload');
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [progress, setProgress] = useState(0);
-  const [statusMessage, setStatusMessage] = useState('Uploading documents...');
+  const [statusMessage, setStatusMessage] = useState('Uploading document...');
   
   const [bookDetected, setBookDetected] = useState('');
   const [questions, setQuestions] = useState<ExtractedQuestion[]>([]);
   const [importing, setImporting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-
-  const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
-  const [totalQuestionsCount, setTotalQuestionsCount] = useState(0);
 
   const [jobId, setJobId] = useState<string | null>(null);
   const [processedPages, setProcessedPages] = useState(0);
@@ -74,97 +59,44 @@ export default function ExtractQuestionsPage() {
     };
   }, []);
 
-  const startPollingAllJobs = (jobsToPoll: ActiveJob[]) => {
+  const pollJobStatus = (id: string) => {
     pollTimerRef.current = setTimeout(async () => {
       try {
-        const updatedJobs = await Promise.all(
-          jobsToPoll.map(async (job) => {
-            if (job.status === 'COMPLETED' || job.status === 'FAILED') {
-              return job;
-            }
-            try {
-              const res = await api.get(`/ocr/job/${job.jobId}`);
-              const { status, progress: jobProgress, processedPages: jobProcessed, totalPages: jobTotal, questionsCount: jobQCount, questions: jobQuestions } = res.data;
-              return {
-                ...job,
-                status: status || 'PROCESSING',
-                progress: jobProgress || 0,
-                processedPages: jobProcessed || 0,
-                totalPages: jobTotal || 1,
-                questionsCount: jobQCount || 0,
-                questions: jobQuestions || [],
-              };
-            } catch (err) {
-              console.error(`Error polling job ${job.jobId}:`, err);
-              return job;
-            }
-          })
-        );
+        const res = await api.get(`/ocr/job/${id}`);
+        const { status, progress: jobProgress, processedPages: jobProcessed, totalPages: jobTotal, questionsCount: jobQCount, questions: extractedQuestions, bookDetected: detectedBook, error } = res.data;
 
-        setActiveJobs(updatedJobs);
+        setProgress(jobProgress || 0);
+        setProcessedPages(jobProcessed || 0);
+        setTotalPages(jobTotal || 1);
+        setQuestionsCount(jobQCount || 0);
 
-        // Compute aggregate metrics for legacy states / charts
-        const totalPagesSum = updatedJobs.reduce((acc, j) => acc + (j.totalPages || 1), 0);
-        const processedPagesSum = updatedJobs.reduce((acc, j) => acc + (j.processedPages || 0), 0);
-        const totalCount = updatedJobs.reduce((acc, j) => acc + (j.questionsCount || 0), 0);
-        const avgProgress = Math.round(updatedJobs.reduce((acc, j) => acc + (j.progress || 0), 0) / updatedJobs.length);
-
-        setProgress(avgProgress);
-        setProcessedPages(processedPagesSum);
-        setTotalPages(totalPagesSum);
-        setQuestionsCount(totalCount);
-        setTotalQuestionsCount(totalCount);
-
-        const hasIncomplete = updatedJobs.some(
-          (j) => j.status === 'PENDING' || j.status === 'PROCESSING'
-        );
-
-        if (!hasIncomplete) {
-          // Finalize and merge all extracted questions
-          const aggregatedQuestions: ExtractedQuestion[] = [];
-          updatedJobs.forEach((j) => {
-            if (j.status === 'COMPLETED' && j.questions) {
-              aggregatedQuestions.push(...j.questions);
-            }
-          });
-
-          // De-duplicate aggregated questions by normalized text
-          const uniqueQuestions: ExtractedQuestion[] = [];
-          const texts = new Set<string>();
-          aggregatedQuestions.forEach((q) => {
-            const normalized = q.text.trim().toLowerCase();
-            if (!texts.has(normalized)) {
-              texts.add(normalized);
-              uniqueQuestions.push({
-                ...q,
-                accepted: true,
-              });
-            }
-          });
-
-          setQuestions(uniqueQuestions);
-          
-          const books = updatedJobs
-            .filter((j) => j.status === 'COMPLETED')
-            .map((j) => j.filename.replace(/\.[^/.]+$/, ''));
-          setBookDetected(books.join(', ') || 'JEE Multi-Book Ingest');
-
+        if (status === 'COMPLETED') {
+          setProgress(100);
+          setBookDetected(detectedBook || 'JEE Test Bank');
+          const parsed = (extractedQuestions || []).map((q: any) => ({
+            ...q,
+            accepted: true,
+          }));
+          setQuestions(parsed);
           setTimeout(() => {
             setStep('review');
-          }, 1000);
+          }, 800);
+        } else if (status === 'FAILED') {
+          alert(`Extraction job failed: ${error || 'Unknown error'}`);
+          setStep('upload');
         } else {
-          startPollingAllJobs(updatedJobs);
+          pollJobStatus(id);
         }
       } catch (err) {
-        console.error('Error in multi-polling cycle:', err);
-        startPollingAllJobs(jobsToPoll);
+        console.error('Error polling job status:', err);
+        pollJobStatus(id);
       }
     }, 3000);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      setSelectedFiles(Array.from(e.target.files));
+      setSelectedFile(e.target.files[0]);
     }
   };
 
@@ -181,7 +113,7 @@ export default function ExtractQuestionsPage() {
     e.preventDefault();
     setDragOver(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      setSelectedFiles(Array.from(e.dataTransfer.files));
+      setSelectedFile(e.dataTransfer.files[0]);
     }
   };
 
@@ -190,49 +122,34 @@ export default function ExtractQuestionsPage() {
   };
 
   const startExtraction = async () => {
-    if (selectedFiles.length === 0) return;
+    if (!selectedFile) return;
 
     setStep('processing');
     setProgress(0);
     setProcessedPages(0);
     setTotalPages(1);
     setQuestionsCount(0);
-    setTotalQuestionsCount(0);
-    setActiveJobs([]);
-    setStatusMessage('Uploading and queuing documents...');
+    setStatusMessage('Uploading and parsing document...');
 
     try {
-      const initializedJobs: ActiveJob[] = [];
+      const formData = new FormData();
+      formData.append('file', selectedFile);
 
-      for (const file of selectedFiles) {
-        const formData = new FormData();
-        formData.append('file', file);
+      const res = await api.post('/ocr/ingest-job', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
 
-        const res = await api.post('/ocr/ingest-job', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        });
-
-        const { jobId: newJobId, totalPages: pagesCount } = res.data;
-        initializedJobs.push({
-          jobId: newJobId,
-          filename: file.name,
-          status: 'PENDING',
-          progress: 0,
-          processedPages: 0,
-          totalPages: pagesCount || 1,
-          questionsCount: 0,
-        });
-      }
-
-      setActiveJobs(initializedJobs);
-      setStatusMessage('Sequential background extraction active...');
+      const { jobId: newJobId, totalPages: pagesCount } = res.data;
+      setJobId(newJobId);
+      setTotalPages(pagesCount || 1);
+      setStatusMessage('Initializing background extraction...');
       
-      startPollingAllJobs(initializedJobs);
+      pollJobStatus(newJobId);
     } catch (err: any) {
       console.error('OCR Extraction error:', err);
-      const errMsg = err.response?.data?.message || 'OCR Question extraction failed to initialize. Please ensure all files are under 50MB and try again.';
+      const errMsg = err.response?.data?.message || 'OCR Question extraction failed to initialize. Please ensure the file is under 50MB and try again.';
       alert(errMsg);
       setStep('upload');
     }
@@ -343,50 +260,32 @@ export default function ExtractQuestionsPage() {
                 <Upload className="w-8 h-8" />
               </div>
               
-              {selectedFiles.length > 0 ? (
-                <div className="w-full max-w-md">
-                  <Badge variant="primary" className="mb-3">
-                    {selectedFiles.length} {selectedFiles.length === 1 ? 'File' : 'Files'} Selected
-                  </Badge>
-                  
-                  <div className="space-y-2 mt-2 w-full text-left max-h-48 overflow-y-auto pr-1">
-                    {selectedFiles.map((file, idx) => (
-                      <div 
-                        key={idx} 
-                        className="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/60 border border-slate-850 text-xs text-slate-300 shadow-sm"
-                      >
-                        <span className="truncate font-semibold max-w-[260px]">{file.name}</span>
-                        <span className="text-[10px] text-slate-500 font-mono shrink-0">
-                          {(file.size / (1024 * 1024)).toFixed(2)} MB
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+              {selectedFile ? (
+                <div>
+                  <Badge variant="primary" className="mb-2">Selected File</Badge>
+                  <p className="text-base font-semibold text-white truncate max-w-xs">{selectedFile.name}</p>
+                  <p className="text-xs text-slate-500 mt-1">{(selectedFile.size / (1024 * 1024)).toFixed(2)} MB</p>
                 </div>
               ) : (
                 <div>
-                  <p className="text-sm font-semibold text-slate-200">Drag & drop your question books here</p>
-                  <p className="text-xs text-slate-500 mt-1.5">
-                    Select <span className="text-indigo-400 font-medium">one or multiple files</span> to ingest in one go
-                  </p>
+                  <p className="text-sm font-semibold text-slate-200">Drag & drop your question book here</p>
+                  <p className="text-xs text-slate-500 mt-1.5"><span className="text-indigo-400">Browse files</span> from your local system</p>
                 </div>
               )}
-              
               <input
                 type="file"
                 ref={fileInputRef}
                 onChange={handleFileChange}
                 accept="application/pdf,image/png,image/jpeg,image/jpg"
                 className="hidden"
-                multiple
               />
-              <p className="text-[11px] text-slate-600 mt-6 uppercase tracking-wider">PDF, PNG, JPEG books or papers</p>
+              <p className="text-[11px] text-slate-600 mt-6 uppercase tracking-wider">PDF, PNG, JPEG up to 50MB</p>
             </div>
 
             <Button
               onClick={startExtraction}
-              disabled={selectedFiles.length === 0}
-              className="mt-8 px-12"
+              disabled={!selectedFile}
+              className="mt-8 px-10"
               size="lg"
             >
               Start Ingestion
@@ -406,18 +305,17 @@ export default function ExtractQuestionsPage() {
             </div>
 
             <h3 className="text-xl font-bold text-white mb-2">
-              Ingesting Question Banks
+              {processedPages > 0 ? `Processing Page ${processedPages} of ${totalPages}` : statusMessage}
             </h3>
             <p className="text-sm text-slate-400 max-w-sm">
-              {totalQuestionsCount > 0 
-                ? `✨ Extracted ${totalQuestionsCount} questions so far across all books...` 
-                : 'Initializing sequential background extractions...'}
+              {questionsCount > 0 
+                ? `✨ Extracted ${questionsCount} questions so far...` 
+                : 'Analyzing document structure and parsing pages...'}
             </p>
 
-            {/* Average Progress Bar */}
-            <div className="w-full max-w-md mt-6">
+            <div className="w-full max-w-md mt-8">
               <div className="flex justify-between text-xs text-slate-400 mb-1.5 font-medium">
-                <span>Average Ingestion Progress</span>
+                <span>Progress</span>
                 <span>{progress}%</span>
               </div>
               <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden shadow-inner">
@@ -428,96 +326,8 @@ export default function ExtractQuestionsPage() {
               </div>
             </div>
 
-            {/* Active Document Ingestion Queue */}
-            <div className="w-full max-w-xl mt-10 space-y-4 text-left">
-              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider px-1">
-                Document Ingestion Queue ({activeJobs.length})
-              </h4>
-              
-              <div className="space-y-3">
-                {activeJobs.map((job) => {
-                  const isCompleted = job.status === 'COMPLETED';
-                  const isFailed = job.status === 'FAILED';
-                  const isProcessing = job.status === 'PROCESSING';
-                  
-                  return (
-                    <div 
-                      key={job.jobId} 
-                      className={cn(
-                        "p-4 rounded-2xl border transition-all duration-300 backdrop-blur-md",
-                        isCompleted ? "border-emerald-500/25 bg-emerald-500/[0.02]" :
-                        isFailed ? "border-rose-500/25 bg-rose-500/[0.02]" :
-                        "border-slate-800 bg-slate-900/40"
-                      )}
-                    >
-                      <div className="flex items-center justify-between gap-4 mb-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <BookOpen className={cn(
-                            "w-4 h-4 shrink-0",
-                            isCompleted ? "text-emerald-400" :
-                            isFailed ? "text-rose-400" :
-                            "text-indigo-400 animate-pulse"
-                          )} />
-                          <span className="text-xs font-bold text-white truncate max-w-xs">{job.filename}</span>
-                        </div>
-                        
-                        <div className="flex items-center gap-2 shrink-0">
-                          {isProcessing && (
-                            <span className="flex items-center gap-1.5 text-[10px] font-bold text-indigo-400">
-                              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-ping shrink-0" />
-                              Page {job.processedPages}/{job.totalPages}
-                            </span>
-                          )}
-                          {isCompleted && (
-                            <Badge className="bg-emerald-500/10 border-emerald-500/20 text-emerald-400 text-[10px] font-semibold px-2 py-0.5">
-                              Completed
-                            </Badge>
-                          )}
-                          {isFailed && (
-                            <Badge className="bg-rose-500/10 border-rose-500/20 text-rose-400 text-[10px] font-semibold px-2 py-0.5">
-                              Failed
-                            </Badge>
-                          )}
-                          {job.status === 'PENDING' && (
-                            <Badge className="bg-slate-800 border-slate-700 text-slate-400 text-[10px] font-semibold px-2 py-0.5">
-                              Pending
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Progress Metrics & Subtext */}
-                      <div className="flex justify-between items-center text-[10px] text-slate-500 mb-2 font-medium">
-                        <span>
-                          {job.questionsCount > 0 
-                            ? `✨ ${job.questionsCount} questions extracted` 
-                            : isFailed 
-                              ? `Error: ${job.error || 'Parsing failed'}`
-                              : 'Queued for sequential processing...'}
-                        </span>
-                        <span className="font-mono">{job.progress}%</span>
-                      </div>
-
-                      {/* Job Progress Indicator */}
-                      <div className="w-full h-1.5 bg-slate-800/80 rounded-full overflow-hidden">
-                        <div
-                          className={cn(
-                            "h-full rounded-full transition-all duration-500",
-                            isCompleted ? "bg-emerald-500" :
-                            isFailed ? "bg-rose-500" :
-                            "bg-gradient-to-r from-indigo-500 to-violet-500"
-                          )}
-                          style={{ width: `${job.progress}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <p className="text-xs text-slate-500 mt-10 max-w-md px-4 leading-relaxed">
-              Respecting Gemini API rate limits. All queued books are processed page-by-page sequentially with a 4-second delay to guarantee complete, timeout-free ingestion.
+            <p className="text-xs text-slate-500 mt-8 max-w-md px-4 leading-relaxed">
+              Respecting Gemini API rate limits (free tier). The system processes each page sequentially with a 4-second delay to guarantee complete, timeout-free ingestion at zero cost.
             </p>
           </div>
         </Card>

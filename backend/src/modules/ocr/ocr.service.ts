@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 
 export interface ExtractedQuestion {
@@ -66,6 +66,15 @@ export class OcrService {
   }
 
   createIngestJob(fileBuffer: Buffer, mimeType: string, filename: string): string {
+    const activeJob = Array.from(this.jobs.values()).find(
+      (j) => j.status === 'PROCESSING' || j.status === 'PENDING'
+    );
+    if (activeJob) {
+      throw new BadRequestException(
+        'An active book ingestion is already running. To protect API rate limits and operate at zero cost, only one book can be processed at a time.',
+      );
+    }
+
     const jobId = Math.random().toString(36).substring(2, 15);
     const totalPages = mimeType === 'application/pdf' ? this.countPdfPages(fileBuffer) : 1;
 
