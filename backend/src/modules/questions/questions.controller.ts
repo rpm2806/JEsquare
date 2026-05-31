@@ -109,6 +109,14 @@ export class QuestionsController {
     return this.questionsService.update(id, dto, user);
   }
 
+  @Delete('clear-all')
+  @Roles('SUPER_ADMIN')
+  @ApiOperation({ summary: 'Clear all questions from question bank (SUPER_ADMIN only)' })
+  @ApiResponse({ status: 200, description: 'Question bank cleared' })
+  async clearAll() {
+    return this.questionsService.clearAll();
+  }
+
   @Delete(':id')
   @Roles('SUPER_ADMIN', 'INSTITUTE_ADMIN', 'TEACHER')
   @ApiOperation({ summary: 'Delete question' })

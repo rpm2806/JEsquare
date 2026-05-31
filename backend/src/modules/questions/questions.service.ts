@@ -287,4 +287,16 @@ export class QuestionsService {
       orderBy: { order: 'asc' },
     });
   }
+
+  async clearAll() {
+    const deletedAnswers = await this.prisma.answer.deleteMany({});
+    const deletedTestQuestions = await this.prisma.testQuestion.deleteMany({});
+    const deletedQuestions = await this.prisma.question.deleteMany({});
+    return {
+      message: 'Question bank cleared successfully!',
+      deletedAnswers: deletedAnswers.count,
+      deletedTestQuestions: deletedTestQuestions.count,
+      deletedQuestions: deletedQuestions.count,
+    };
+  }
 }
