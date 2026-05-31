@@ -9,7 +9,7 @@ services:
     env: node
     plan: free # 100% Free tier!
     rootDir: backend
-    buildCommand: npm ci && npx prisma generate && npm run build
+    buildCommand: sed -i 's/provider = "sqlite"/provider = "postgresql"/g' backend/prisma/schema.prisma && npm ci && npx prisma generate && npm run build
     startCommand: node dist/main
     envVars:
       - key: DATABASE_URL
