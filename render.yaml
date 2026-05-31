@@ -1,0 +1,28 @@
+# =================================================================================
+# 🚀 Render.com Infrastructure Blueprint for JEsquare
+# =================================================================================
+# This blueprint automates the deployment of your NestJS backend.
+# =================================================================================
+services:
+  - type: web
+    name: jesquare-backend
+    env: node
+    plan: free # 100% Free tier!
+    rootDir: backend
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: node dist/main
+    envVars:
+      - key: DATABASE_URL
+        sync: false # Render will prompt you to paste your Neon DB connection string
+      - key: JWT_SECRET
+        value: jesquare-prod-jwt-secret-2026-secure
+      - key: JWT_REFRESH_SECRET
+        value: jesquare-prod-refresh-secret-2026-secure
+      - key: JWT_EXPIRATION
+        value: 15m
+      - key: JWT_REFRESH_EXPIRATION
+        value: 7d
+      - key: PORT
+        value: 10000
+      - key: FRONTEND_URL
+        value: https://jesquare.vercel.app # Points directly to your live Vercel domain!
