@@ -10,7 +10,7 @@ services:
     plan: free # 100% Free tier!
     rootDir: backend
     buildCommand: sed -i 's/provider = "sqlite"/provider = "postgresql"/g' prisma/schema.prisma && npm ci && npx prisma generate && npm run build
-    startCommand: node dist/main
+    startCommand: node dist/src/main
     envVars:
       - key: DATABASE_URL
         sync: false # Render will prompt you to paste your Neon DB connection string
