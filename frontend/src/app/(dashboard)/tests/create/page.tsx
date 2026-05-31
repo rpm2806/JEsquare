@@ -226,6 +226,30 @@ export default function CreateTestPage() {
     }));
   };
 
+  const handleNextStep = () => {
+    if (currentStep === 0) {
+      if (!formData.title.trim()) {
+        alert('Please enter a test title');
+        return;
+      }
+      const duration = parseInt(formData.duration) || 0;
+      if (duration <= 0) {
+        alert('Please enter a valid test duration.');
+        return;
+      }
+      const qCount = parseInt(formData.questionCount) || 0;
+      if (qCount <= 0) {
+        alert('Please enter a valid question count.');
+        return;
+      }
+      if (user?.role === 'STUDENT' && qCount > 75) {
+        alert('Students in the free tier are limited to a maximum of 75 questions per test.');
+        return;
+      }
+    }
+    setCurrentStep(currentStep + 1);
+  };
+
   const handleGenerate = async () => {
     if (!formData.title.trim()) {
       alert('Please enter a test title');
@@ -233,6 +257,11 @@ export default function CreateTestPage() {
     }
     if (formData.subjects.length === 0) {
       alert('Please select at least one subject');
+      return;
+    }
+    const totalQ = parseInt(formData.questionCount) || 30;
+    if (user?.role === 'STUDENT' && totalQ > 75) {
+      alert('Students in the free tier are limited to a maximum of 75 questions per test.');
       return;
     }
 
@@ -364,12 +393,19 @@ export default function CreateTestPage() {
                 value={formData.duration}
                 onChange={(e) => setFormData((prev) => ({ ...prev, duration: e.target.value }))}
               />
-              <Input
-                label="Total Questions"
-                type="number"
-                value={formData.questionCount}
-                onChange={(e) => setFormData((prev) => ({ ...prev, questionCount: e.target.value }))}
-              />
+              <div className="flex flex-col">
+                <Input
+                  label="Total Questions"
+                  type="number"
+                  value={formData.questionCount}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, questionCount: e.target.value }))}
+                />
+                {user?.role === 'STUDENT' && parseInt(formData.questionCount) > 75 && (
+                  <p className="text-rose-500 text-xs mt-1.5 font-medium animate-pulse">
+                    ⚠️ Maximum 75 questions allowed for student practice.
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -552,7 +588,7 @@ export default function CreateTestPage() {
         </Button>
         <div className="flex items-center gap-3">
           {currentStep < steps.length - 1 ? (
-            <Button onClick={() => setCurrentStep(currentStep + 1)} disabled={loading}>
+            <Button onClick={handleNextStep} disabled={loading}>
               Next Step
             </Button>
           ) : (

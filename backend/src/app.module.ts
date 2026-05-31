@@ -14,6 +14,7 @@ import { OcrModule } from './modules/ocr/ocr.module';
 import { DoubtsModule } from './modules/doubts/doubts.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { PaymentModule } from './modules/payment/payment.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { PaymentModule } from './modules/payment/payment.module';
     DoubtsModule,
     StorageModule,
     PaymentModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}

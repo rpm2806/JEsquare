@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import type { AnswerStatus } from '../types';
+import api from '../lib/api';
 
 interface ExamState {
   currentQuestion: number;
@@ -14,8 +15,12 @@ interface ExamState {
   currentSection: number;
   sectionNames: string[];
   isSubmitModalOpen: boolean;
+  attemptId: string | null;
+  questions: any[];
 
   // Actions
+  setAttemptInfo: (attemptId: string, questions: any[]) => void;
+  restoreAttemptState: (attemptId: string, questions: any[], savedAnswers: any[]) => void;
   setTotalQuestions: (total: number) => void;
   setSections: (sections: string[]) => void;
   setCurrentSection: (section: number) => void;
@@ -53,6 +58,72 @@ export const useExamStore = create<ExamState>((set, get) => ({
   currentSection: 0,
   sectionNames: [],
   isSubmitModalOpen: false,
+  attemptId: null,
+  questions: [],
+
+  setAttemptInfo: (attemptId, questions) => set({ attemptId, questions }),
+
+  restoreAttemptState: (attemptId: string, questions: any[], savedAnswers: any[]) => {
+    const answers = new Map<number, string>();
+    const statuses = new Map<number, AnswerStatus>();
+    const markedForReview = new Set<number>();
+    const visited = new Set<number>();
+
+    questions.forEach((q, index) => {
+      const sa = savedAnswers.find((a) => a.questionId === q.id);
+      if (sa) {
+        const answerVal = q.type === 'NUMERICAL'
+          ? (sa.numericalAnswer !== null && sa.numericalAnswer !== undefined ? String(sa.numericalAnswer) : undefined)
+          : sa.selectedOption;
+
+        if (answerVal !== undefined && answerVal !== null && answerVal !== '') {
+          answers.set(index, answerVal);
+        }
+
+        if (sa.isMarkedForReview) {
+          markedForReview.add(index);
+        }
+
+        if (sa.isVisited) {
+          visited.add(index);
+        }
+
+        // Determine status
+        const hasAnswer = answers.has(index);
+        if (hasAnswer) {
+          statuses.set(
+            index,
+            sa.isMarkedForReview ? 'ANSWERED_AND_MARKED' : 'ANSWERED'
+          );
+        } else {
+          if (sa.isMarkedForReview) {
+            statuses.set(index, 'MARKED_FOR_REVIEW');
+          } else if (sa.isVisited) {
+            statuses.set(index, 'NOT_ANSWERED');
+          }
+        }
+      }
+    });
+
+    // Make sure we always mark the first question as visited
+    if (questions.length > 0) {
+      visited.add(0);
+      if (!statuses.has(0)) {
+        statuses.set(0, 'NOT_ANSWERED');
+      }
+    }
+
+    set({
+      attemptId,
+      questions,
+      answers,
+      statuses,
+      markedForReview,
+      visited,
+      currentQuestion: 0,
+      currentSection: 0,
+    });
+  },
 
   setTotalQuestions: (total) => set({ totalQuestions: total }),
 
@@ -70,6 +141,25 @@ export const useExamStore = create<ExamState>((set, get) => ({
       marked.has(questionIndex) ? 'ANSWERED_AND_MARKED' : 'ANSWERED'
     );
     set({ answers, statuses });
+
+    // Autosave to backend if attempt info is active
+    const { attemptId, questions } = get();
+    if (attemptId && questions[questionIndex]) {
+      const q = questions[questionIndex];
+      const payload: any = {
+        questionId: q.id,
+        isMarkedForReview: marked.has(questionIndex),
+        isVisited: true,
+      };
+      if (q.type === 'NUMERICAL') {
+        payload.numericalAnswer = parseFloat(answer);
+      } else {
+        payload.selectedOption = answer;
+      }
+      api.post(`/attempts/${attemptId}/answer`, payload).catch((err) => {
+        console.error('Autosave answer failed:', err);
+      });
+    }
   },
 
   clearAnswer: (questionIndex) => {
@@ -78,6 +168,21 @@ export const useExamStore = create<ExamState>((set, get) => ({
     answers.delete(questionIndex);
     statuses.set(questionIndex, 'NOT_ANSWERED');
     set({ answers, statuses });
+
+    // Autosave clear response to backend if attempt info is active
+    const { attemptId, questions, markedForReview } = get();
+    if (attemptId && questions[questionIndex]) {
+      const q = questions[questionIndex];
+      api.post(`/attempts/${attemptId}/answer`, {
+        questionId: q.id,
+        selectedOption: null,
+        numericalAnswer: null,
+        isMarkedForReview: markedForReview.has(questionIndex),
+        isVisited: true,
+      }).catch((err) => {
+        console.error('Autosave clear failed:', err);
+      });
+    }
   },
 
   markForReview: (questionIndex) => {
@@ -87,6 +192,28 @@ export const useExamStore = create<ExamState>((set, get) => ({
     marked.add(questionIndex);
     statuses.set(questionIndex, hasAnswer ? 'ANSWERED_AND_MARKED' : 'MARKED_FOR_REVIEW');
     set({ markedForReview: marked, statuses });
+
+    // Autosave mark for review to backend if attempt info is active
+    const { attemptId, questions, answers } = get();
+    if (attemptId && questions[questionIndex]) {
+      const q = questions[questionIndex];
+      const ans = answers.get(questionIndex);
+      const payload: any = {
+        questionId: q.id,
+        isMarkedForReview: true,
+        isVisited: true,
+      };
+      if (ans !== undefined) {
+        if (q.type === 'NUMERICAL') {
+          payload.numericalAnswer = parseFloat(ans);
+        } else {
+          payload.selectedOption = ans;
+        }
+      }
+      api.post(`/attempts/${attemptId}/answer`, payload).catch((err) => {
+        console.error('Autosave mark for review failed:', err);
+      });
+    }
   },
 
   unmarkForReview: (questionIndex) => {
@@ -96,6 +223,28 @@ export const useExamStore = create<ExamState>((set, get) => ({
     marked.delete(questionIndex);
     statuses.set(questionIndex, hasAnswer ? 'ANSWERED' : 'NOT_ANSWERED');
     set({ markedForReview: marked, statuses });
+
+    // Autosave unmark to backend if attempt info is active
+    const { attemptId, questions, answers } = get();
+    if (attemptId && questions[questionIndex]) {
+      const q = questions[questionIndex];
+      const ans = answers.get(questionIndex);
+      const payload: any = {
+        questionId: q.id,
+        isMarkedForReview: false,
+        isVisited: true,
+      };
+      if (ans !== undefined) {
+        if (q.type === 'NUMERICAL') {
+          payload.numericalAnswer = parseFloat(ans);
+        } else {
+          payload.selectedOption = ans;
+        }
+      }
+      api.post(`/attempts/${attemptId}/answer`, payload).catch((err) => {
+        console.error('Autosave unmark failed:', err);
+      });
+    }
   },
 
   visitQuestion: (questionIndex) => {
@@ -106,6 +255,28 @@ export const useExamStore = create<ExamState>((set, get) => ({
       statuses.set(questionIndex, 'NOT_ANSWERED');
     }
     set({ visited, statuses });
+
+    // Autosave visit state to backend if attempt info is active
+    const { attemptId, questions, answers, markedForReview } = get();
+    if (attemptId && questions[questionIndex]) {
+      const q = questions[questionIndex];
+      const ans = answers.get(questionIndex);
+      const payload: any = {
+        questionId: q.id,
+        isMarkedForReview: markedForReview.has(questionIndex),
+        isVisited: true,
+      };
+      if (ans !== undefined) {
+        if (q.type === 'NUMERICAL') {
+          payload.numericalAnswer = parseFloat(ans);
+        } else {
+          payload.selectedOption = ans;
+        }
+      }
+      api.post(`/attempts/${attemptId}/answer`, payload).catch((err) => {
+        console.error('Autosave visit failed:', err);
+      });
+    }
   },
 
   nextQuestion: () => {
@@ -191,5 +362,7 @@ export const useExamStore = create<ExamState>((set, get) => ({
       currentSection: 0,
       sectionNames: [],
       isSubmitModalOpen: false,
+      attemptId: null,
+      questions: [],
     }),
 }));

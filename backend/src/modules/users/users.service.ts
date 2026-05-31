@@ -231,7 +231,7 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { balance: user.balance + amount },
       select: {
@@ -242,5 +242,16 @@ export class UsersService {
         balance: true,
       },
     });
+
+    await this.prisma.notification.create({
+      data: {
+        userId,
+        title: 'Wallet Credit',
+        message: `₹${amount} has been successfully credited to your wallet balance.`,
+        type: 'WALLET',
+      },
+    });
+
+    return updated;
   }
 }

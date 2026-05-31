@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuthStore } from '../../store/auth-store';
 import { getInitials } from '../../lib/utils';
+import api from '../../lib/api';
+import { cn } from '../../lib/utils';
 
 export function Header() {
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -12,6 +14,37 @@ export function Header() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
+  const [notifications, setNotifications] = useState<any[]>([]);
+
+  const fetchNotifications = async () => {
+    if (!user) return;
+    try {
+      const res = await api.get('/notifications');
+      setNotifications(res.data || []);
+    } catch (err) {
+      console.error('Failed to fetch notifications:', err);
+    }
+  };
+
+  React.useEffect(() => {
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 15000);
+    return () => clearInterval(interval);
+  }, [user]);
+
+  const handleMarkAsRead = async (id: string) => {
+    try {
+      await api.patch(`/notifications/${id}/read`);
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, isRead: true } : n))
+      );
+    } catch (err) {
+      console.error('Failed to mark notification as read:', err);
+    }
+  };
+
+  const unreadNotifications = notifications.filter((n) => !n.isRead);
+  const displayNotifications = notifications.slice(0, 5);
 
   React.useEffect(() => {
     const savedTheme = localStorage.getItem('theme') as 'dark' | 'light' || 'dark';
@@ -111,42 +144,65 @@ export function Header() {
           <div className="relative">
             <button
               onClick={() => setShowNotifications(!showNotifications)}
-              className="relative p-2 text-slate-400 hover:text-white hover:bg-slate-800/50 rounded-xl transition-colors"
+              className="relative p-2 text-slate-400 hover:text-white hover:bg-slate-800/50 rounded-xl transition-colors flex items-center justify-center"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
               </svg>
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full" />
+              {unreadNotifications.length > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-4 h-4 bg-rose-500 text-[9px] font-bold text-white rounded-full flex items-center justify-center px-1">
+                  {unreadNotifications.length}
+                </span>
+              )}
             </button>
 
             {showNotifications && (
               <div className="absolute right-0 mt-2 w-80 bg-slate-900 border border-slate-700/50 rounded-2xl shadow-2xl shadow-black/40 overflow-hidden animate-scale-in">
-                <div className="p-4 border-b border-slate-800">
+                <div className="p-4 border-b border-slate-800 flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-white">Notifications</h3>
+                  {unreadNotifications.length > 0 && (
+                    <span className="text-[10px] py-0.5 px-1.5 font-bold uppercase tracking-wider rounded bg-indigo-500/25 text-indigo-300 border border-indigo-500/30">
+                      {unreadNotifications.length} new
+                    </span>
+                  )}
                 </div>
                 <div className="max-h-80 overflow-y-auto">
-                  {[1, 2, 3].map((i) => (
-                    <div
-                      key={i}
-                      className="p-4 border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer transition-colors"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center shrink-0">
-                          <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                        </div>
-                        <div>
-                          <p className="text-sm text-white">New test results available</p>
-                          <p className="text-xs text-slate-500 mt-0.5">{i}h ago</p>
+                  {displayNotifications.length > 0 ? (
+                    displayNotifications.map((n) => (
+                      <div
+                        key={n.id}
+                        onClick={() => handleMarkAsRead(n.id)}
+                        className={cn(
+                          'p-4 border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer transition-colors',
+                          !n.isRead && 'bg-indigo-500/5'
+                        )}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className={cn(
+                            'w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-sm font-bold',
+                            n.type === 'WALLET' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                          )}>
+                            {n.type === 'WALLET' ? '₹' : '🔔'}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className={cn("text-xs truncate font-medium", n.isRead ? "text-slate-400" : "text-white")}>{n.title}</p>
+                            <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">{n.message}</p>
+                            <p className="text-[9px] text-slate-500 mt-1">
+                              {new Date(n.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })} at {new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                          </div>
                         </div>
                       </div>
+                    ))
+                  ) : (
+                    <div className="p-8 text-center text-slate-500 text-xs">
+                      No notifications found
                     </div>
-                  ))}
+                  )}
                 </div>
-                <div className="p-3 text-center">
+                <div className="p-3 text-center border-t border-slate-800/40">
                   <button className="text-xs text-indigo-400 hover:text-indigo-300 font-medium transition-colors">
-                    View all notifications
+                    Stay up-to-date
                   </button>
                 </div>
               </div>

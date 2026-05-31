@@ -58,4 +58,19 @@ export class AnalyticsController {
   async getLeaderboard(@Param('testId') testId: string) {
     return this.analyticsService.getLeaderboard(testId);
   }
+
+  @Get('super-admin')
+  @Roles('SUPER_ADMIN')
+  @ApiOperation({ summary: 'Get Super Admin Platform stats' })
+  @ApiResponse({ status: 200, description: 'Super Admin metrics' })
+  async getSuperAdminAnalytics() {
+    return this.analyticsService.getSuperAdminAnalytics();
+  }
+
+  @Get('global-leaderboard')
+  @ApiOperation({ summary: 'Get global cohort leaderboard' })
+  @ApiResponse({ status: 200, description: 'Global student rankings' })
+  async getGlobalLeaderboard() {
+    return this.analyticsService.getGlobalLeaderboard();
+  }
 }

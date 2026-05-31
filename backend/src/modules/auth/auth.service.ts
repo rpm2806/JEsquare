@@ -11,6 +11,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { v4 as uuidv4 } from 'uuid';
+import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class AuthService {
@@ -80,10 +81,87 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    // ────────────────────────────────────────────────────────────────
+    // 🔑 MFA OTP GENERATION & DISPATCH PIPELINE
+    // ────────────────────────────────────────────────────────────────
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins expiry
+
+    await this.prisma.verificationCode.upsert({
+      where: { email: dto.email },
+      update: { code, expiresAt, createdAt: new Date() },
+      create: { email: dto.email, code, expiresAt },
+    });
+
+    // Output code to terminal stdout for local sandbox / quick developer testing
+    console.log('\n==================================================');
+    console.log(`[MFA OTP Verification] EMAIL OTP CODE IS: ${code}`);
+    console.log(`Email provided: ${dto.email}`);
+    console.log('==================================================\n');
+
+    try {
+      const transporter = nodemailer.createTransport({
+        host: this.configService.get<string>('SMTP_HOST') || '',
+        port: parseInt(this.configService.get<string>('SMTP_PORT') || '587'),
+        secure: this.configService.get<string>('SMTP_SECURE') === 'true',
+        auth: {
+          user: this.configService.get<string>('SMTP_USER') || '',
+          pass: this.configService.get<string>('SMTP_PASSWORD') || '',
+        },
+      });
+
+      await transporter.sendMail({
+        from: '"JEsquare" <no-reply@jeesaas.com>',
+        to: dto.email,
+        subject: 'JEsquare Account Verification OTP Code',
+        text: `Your 6-digit OTP code for JEsquare login is: ${code}. It is valid for 5 minutes.`,
+        html: `<div style="font-family: sans-serif; padding: 20px; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px;">
+          <h2 style="color: #6366f1; border-bottom: 2px solid #f1f5f9; padding-bottom: 10px;">JEsquare Security Verification</h2>
+          <p style="font-size: 16px; line-height: 1.6;">Hello,</p>
+          <p style="font-size: 16px; line-height: 1.6;">Your 6-digit OTP code for login is:</p>
+          <div style="background-color: #f8fafc; padding: 15px; text-align: center; border-radius: 8px; margin: 20px 0;">
+            <span style="font-size: 36px; font-weight: bold; letter-spacing: 6px; color: #4f46e5;">${code}</span>
+          </div>
+          <p style="font-size: 14px; color: #64748b; line-height: 1.6;">This code is valid for 5 minutes. Please do not share this OTP with anyone.</p>
+        </div>`,
+      });
+      this.logger.log(`OTP sent successfully via email to: ${dto.email}`);
+    } catch (err: any) {
+      this.logger.warn(`Failed to dispatch SMTP mail, falling back to console log: ${err.message}`);
+    }
+
+    return {
+      requiresOtp: true,
+      email: dto.email,
+    };
+  }
+
+  async verifyOtp(email: string, code: string) {
+    const verification = await this.prisma.verificationCode.findUnique({
+      where: { email },
+    });
+
+    if (!verification || verification.code !== code || verification.expiresAt < new Date()) {
+      throw new UnauthorizedException('Invalid or expired OTP');
+    }
+
+    // OTP is valid! Delete it
+    await this.prisma.verificationCode.delete({
+      where: { email },
+    });
+
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('User account is inactive');
+    }
+
     const tokens = await this.generateTokens(user.id, user.email, user.role);
     await this.createSession(user.id, tokens.accessToken, tokens.refreshToken);
 
-    this.logger.log(`User logged in: ${user.email}`);
+    this.logger.log(`User logged in via OTP: ${user.email}`);
 
     let subscriptionPlan = 'FREE';
     if (user.instituteId) {

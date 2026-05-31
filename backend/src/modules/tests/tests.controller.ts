@@ -39,8 +39,13 @@ export class TestsController {
     private readonly prisma: PrismaService,
   ) {}
 
-  private async enforceTestLimits(user: any) {
+  private async enforceTestLimits(user: any, questionCount = 0) {
     if (user.role === 'STUDENT') {
+      if (questionCount > 75) {
+        throw new ForbiddenException(
+          'Students are limited to a maximum of 75 questions per test.',
+        );
+      }
       const count = await this.prisma.test.count({
         where: { createdById: user.id },
       });
@@ -57,6 +62,14 @@ export class TestsController {
         await this.prisma.user.update({
           where: { id: user.id },
           data: { balance: dbUser.balance - 5 },
+        });
+        await this.prisma.notification.create({
+          data: {
+            userId: user.id,
+            title: 'Wallet Deduction',
+            message: '₹5 deducted from your wallet for custom mock test creation.',
+            type: 'WALLET',
+          },
         });
       }
     }
@@ -87,7 +100,7 @@ export class TestsController {
   @ApiOperation({ summary: 'Create a new test manually' })
   @ApiResponse({ status: 201, description: 'Test created' })
   async create(@Body() dto: CreateTestDto, @CurrentUser() user: any) {
-    await this.enforceTestLimits(user);
+    await this.enforceTestLimits(user, dto.questionIds?.length || 0);
     return this.testsService.create(dto, user.id);
   }
 
@@ -99,7 +112,8 @@ export class TestsController {
     @Body() dto: GenerateTestDto,
     @CurrentUser() user: any,
   ) {
-    await this.enforceTestLimits(user);
+    const totalQCount = dto.sections?.reduce((acc, sec) => acc + (sec.questionCount || 0), 0) || 0;
+    await this.enforceTestLimits(user, totalQCount);
     return this.testGeneratorService.generateTest(dto, user.id);
   }
 

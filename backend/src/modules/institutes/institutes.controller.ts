@@ -91,4 +91,12 @@ export class InstitutesController {
   ) {
     return this.institutesService.addMember(id, dto, user);
   }
+
+  @Get(':id/activity')
+  @Roles('SUPER_ADMIN', 'INSTITUTE_ADMIN', 'TEACHER')
+  @ApiOperation({ summary: 'Get institute recent activities' })
+  @ApiResponse({ status: 200, description: 'Chronological activity logs' })
+  async getInstituteActivity(@Param('id') id: string) {
+    return this.institutesService.getInstituteActivity(id);
+  }
 }

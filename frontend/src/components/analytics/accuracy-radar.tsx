@@ -1,9 +1,9 @@
 'use client';
-
+ 
 import React from 'react';
 import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ResponsiveContainer, Tooltip } from 'recharts';
-
-const data = [
+ 
+const fallbackData = [
   { subject: 'Physics', accuracy: 72, fullMark: 100 },
   { subject: 'Chemistry', accuracy: 65, fullMark: 100 },
   { subject: 'Mathematics', accuracy: 78, fullMark: 100 },
@@ -12,11 +12,17 @@ const data = [
   { subject: 'Consistency', accuracy: 55, fullMark: 100 },
 ];
 
-export function AccuracyRadar() {
+interface AccuracyRadarProps {
+  data?: { subject: string; accuracy: number; fullMark: number }[];
+}
+ 
+export function AccuracyRadar({ data }: AccuracyRadarProps) {
+  const chartData = data && data.length > 0 ? data : fallbackData;
+
   return (
     <div className="w-full h-72">
       <ResponsiveContainer width="100%" height="100%">
-        <RadarChart data={data}>
+        <RadarChart data={chartData}>
           <PolarGrid stroke="#334155" />
           <PolarAngleAxis dataKey="subject" stroke="#94a3b8" fontSize={12} />
           <PolarRadiusAxis stroke="#334155" fontSize={10} />

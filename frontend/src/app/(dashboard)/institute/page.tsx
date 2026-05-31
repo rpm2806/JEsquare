@@ -1,27 +1,67 @@
 'use client';
-
-import React from 'react';
+ 
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Card } from '../../../components/ui/card';
 import { Badge } from '../../../components/ui/badge';
 import { Button } from '../../../components/ui/button';
-
-const stats = [
-  { label: 'Total Teachers', value: '12', icon: '👨‍🏫', change: '+2 this month' },
-  { label: 'Total Students', value: '456', icon: '🎓', change: '+34 this month' },
-  { label: 'Active Batches', value: '8', icon: '📚', change: '2 tests this week' },
-  { label: 'Tests Created', value: '89', icon: '📝', change: '+12 this month' },
-];
-
-const recentActivity = [
-  { text: 'Teacher Amit added 20 questions to Physics bank', time: '30 min ago', type: 'question' },
-  { text: 'Batch "2025 Regular" completed Mock Test 15', time: '1 hour ago', type: 'test' },
-  { text: 'New student Rohan enrolled in Dropper batch', time: '2 hours ago', type: 'student' },
-  { text: 'Teacher Priya published Chemistry Chapter Test', time: '3 hours ago', type: 'test' },
-  { text: 'Subscription renewed — Pro Plan active', time: '1 day ago', type: 'billing' },
-];
+import { useAuthStore } from '../../../store/auth-store';
+import api from '../../../lib/api';
+import { Loader2 } from 'lucide-react';
 
 export default function InstitutePage() {
+  const { user } = useAuthStore();
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<any>(null);
+  const [activities, setActivities] = useState<any[]>([]);
+
+  useEffect(() => {
+    async function loadDashboard() {
+      if (!user || !user.instituteId) return;
+      try {
+        setLoading(true);
+        const [statsRes, activityRes] = await Promise.all([
+          api.get(`/analytics/institute/${user.instituteId}`),
+          api.get(`/institutes/${user.instituteId}/activity`),
+        ]);
+        setStats(statsRes.data.stats || null);
+        setActivities(activityRes.data || []);
+      } catch (err) {
+        console.error('Failed to load institute dashboard stats:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadDashboard();
+  }, [user]);
+
+  const formatActivityTime = (dateStr: string) => {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins} min ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+    const days = Math.floor(hours / 24);
+    return `${days} day${days > 1 ? 's' : ''} ago`;
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-[60vh] flex flex-col items-center justify-center gap-3">
+        <Loader2 className="w-10 h-10 text-indigo-500 animate-spin" />
+        <p className="text-slate-400 text-sm">Synchronizing institute practice networks...</p>
+      </div>
+    );
+  }
+
+  const statCards = [
+    { label: 'Total Teachers', value: stats?.totalTeachers ?? 0, icon: '👨‍🏫', change: 'Manage staff roles' },
+    { label: 'Total Students', value: stats?.totalStudents ?? 0, icon: '🎓', change: 'Active practice cohort' },
+    { label: 'Tests Created', value: stats?.totalTests ?? 0, icon: '📝', change: 'Mock exams catalog' },
+    { label: 'Syllabus Questions', value: stats?.totalQuestions ?? 0, icon: '❓', change: 'Dynamically generated' },
+  ];
+
   return (
     <div className="space-y-8 animate-fade-in">
       {/* Header */}
@@ -42,13 +82,13 @@ export default function InstitutePage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {stats.map((stat) => (
+        {statCards.map((stat) => (
           <Card key={stat.label} hover>
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-xs text-slate-500">{stat.label}</p>
                 <p className="text-2xl font-bold text-white mt-1">{stat.value}</p>
-                <p className="text-xs text-emerald-400 mt-1">{stat.change}</p>
+                <p className="text-xs text-indigo-400 mt-1">{stat.change}</p>
               </div>
               <span className="text-2xl">{stat.icon}</span>
             </div>
@@ -59,9 +99,9 @@ export default function InstitutePage() {
       {/* Quick Links */}
       <div className="grid md:grid-cols-3 gap-4">
         {[
-          { title: 'Teachers', description: 'Manage teachers and permissions', href: '/institute/teachers', icon: '👨‍🏫', count: '12 teachers' },
-          { title: 'Batches', description: 'Create and manage student batches', href: '/institute/batches', icon: '📚', count: '8 batches' },
-          { title: 'Billing', description: 'Subscription and usage details', href: '/institute/billing', icon: '💳', count: 'Pro Plan' },
+          { title: 'Teachers', description: 'Manage teachers and permissions', href: '/institute/teachers', icon: '👨‍🏫', count: `${stats?.totalTeachers ?? 0} teachers` },
+          { title: 'Batches', description: 'Create and manage student batches', href: '/institute/batches', icon: '📚', count: 'Active Batches' },
+          { title: 'Billing', description: 'Subscription and usage details', href: '/institute/billing', icon: '💳', count: 'Pro Tier' },
         ].map((link) => (
           <Link key={link.href} href={link.href}>
             <Card hover className="group h-full">
@@ -82,24 +122,30 @@ export default function InstitutePage() {
       <Card>
         <h2 className="text-lg font-semibold text-white mb-4">Recent Activity</h2>
         <div className="space-y-4">
-          {recentActivity.map((activity, i) => (
-            <div key={i} className="flex items-start gap-3 p-3 rounded-xl hover:bg-slate-800/30 transition-colors">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
-                activity.type === 'question' ? 'bg-indigo-500/20 text-indigo-400' :
-                activity.type === 'test' ? 'bg-violet-500/20 text-violet-400' :
-                activity.type === 'student' ? 'bg-emerald-500/20 text-emerald-400' :
-                'bg-amber-500/20 text-amber-400'
-              }`}>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+          {activities.length > 0 ? (
+            activities.map((activity, i) => (
+              <div key={i} className="flex items-start gap-3 p-3 rounded-xl hover:bg-slate-800/30 transition-colors">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                  activity.type === 'QUESTION_UPLOAD' ? 'bg-indigo-500/20 text-indigo-400' :
+                  activity.type === 'TEST_CREATE' ? 'bg-violet-500/20 text-violet-400' :
+                  activity.type === 'STUDENT_ENROLL' ? 'bg-emerald-500/20 text-emerald-400' :
+                  'bg-amber-500/20 text-amber-400'
+                }`}>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm text-slate-350">{activity.message}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">{formatActivityTime(activity.date)}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm text-slate-300">{activity.text}</p>
-                <p className="text-xs text-slate-500 mt-0.5">{activity.time}</p>
-              </div>
+            ))
+          ) : (
+            <div className="p-8 text-center text-slate-500 text-sm">
+              No recent activity logged for this institute yet. Enroll students or construct mock exams to populate activity logs!
             </div>
-          ))}
+          )}
         </div>
       </Card>
     </div>

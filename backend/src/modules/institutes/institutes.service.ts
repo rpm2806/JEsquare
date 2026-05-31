@@ -216,4 +216,78 @@ export class InstitutesService {
       },
     });
   }
+
+  async getInstituteActivity(instituteId: string) {
+    const [questions, tests, students, attempts] = await Promise.all([
+      this.prisma.question.findMany({
+        where: { instituteId },
+        select: { id: true, text: true, createdAt: true, subject: { select: { name: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      this.prisma.test.findMany({
+        where: { instituteId },
+        select: { id: true, title: true, createdAt: true, type: true },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      this.prisma.user.findMany({
+        where: { instituteId, role: 'STUDENT' },
+        select: { id: true, name: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      this.prisma.attempt.findMany({
+        where: { test: { instituteId }, NOT: { status: 'IN_PROGRESS' } },
+        select: {
+          id: true,
+          score: true,
+          submittedAt: true,
+          student: { select: { name: true } },
+          test: { select: { title: true, totalMarks: true } },
+        },
+        orderBy: { submittedAt: 'desc' },
+        take: 10,
+      }),
+    ]);
+
+    const activities: any[] = [];
+
+    questions.forEach((q) => {
+      activities.push({
+        type: 'QUESTION_UPLOAD',
+        message: `New question added in ${q.subject?.name || 'JEE Syllabus'}: "${q.text.substring(0, 60)}..."`,
+        date: q.createdAt,
+      });
+    });
+
+    tests.forEach((t) => {
+      activities.push({
+        type: 'TEST_CREATE',
+        message: `New Mock Test generated: "${t.title}" (${t.type.replace(/_/g, ' ')})`,
+        date: t.createdAt,
+      });
+    });
+
+    students.forEach((s) => {
+      activities.push({
+        type: 'STUDENT_ENROLL',
+        message: `Student "${s.name}" enrolled into practice cohort.`,
+        date: s.createdAt,
+      });
+    });
+
+    attempts.forEach((a) => {
+      activities.push({
+        type: 'TEST_ATTEMPT',
+        message: `Student "${a.student?.name || 'Anonymous'}" scored ${a.score}/${a.test?.totalMarks || 300} on "${a.test?.title}".`,
+        date: a.submittedAt || new Date(),
+      });
+    });
+
+    // Sort by date descending
+    activities.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    return activities.slice(0, 10);
+  }
 }

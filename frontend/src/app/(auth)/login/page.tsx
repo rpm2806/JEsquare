@@ -25,6 +25,12 @@ export default function LoginPage() {
   const [googleEmail, setGoogleEmail] = useState('');
   const [googleAvatar, setGoogleAvatar] = useState('https://github.com/rpm2806.png');
 
+  // MFA OTP states
+  const [requiresOtp, setRequiresOtp] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpTimer, setOtpTimer] = useState(60);
+
   const { login } = useAuthStore();
   const router = useRouter();
 
@@ -248,14 +254,58 @@ export default function LoginPage() {
     },
   ];
 
+  // MFA OTP timer countdown hook
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (requiresOtp && otpTimer > 0) {
+      interval = setInterval(() => {
+        setOtpTimer((prev) => prev - 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [requiresOtp, otpTimer]);
+
+  const handleOtpVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setOtpLoading(true);
+    try {
+      const res = await api.post('/auth/verify-otp', { email, code: otpCode });
+      login(res.data.user, res.data.accessToken, res.data.refreshToken);
+      setRequiresOtp(false);
+      router.push('/dashboard');
+    } catch (err: any) {
+      alert(err.response?.data?.message || 'Invalid or expired verification code.');
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    try {
+      setOtpTimer(60);
+      setOtpCode('');
+      await api.post('/auth/login', { email, password });
+      alert('Verification code resent successfully!');
+    } catch (err: any) {
+      alert('Failed to resend verification code. Please check your credentials.');
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
       const res = await api.post('/auth/login', { email, password });
-      login(res.data.user, res.data.accessToken, res.data.refreshToken);
-      router.push('/dashboard');
+      if (res.data.requiresOtp) {
+        setRequiresOtp(true);
+        setOtpCode('');
+        setOtpTimer(60);
+      } else {
+        login(res.data.user, res.data.accessToken, res.data.refreshToken);
+        router.push('/dashboard');
+      }
     } catch (err: unknown) {
       const error = err as { response?: { data?: { message?: string } } };
       setError(error.response?.data?.message || 'Invalid credentials');
@@ -604,6 +654,85 @@ export default function LoginPage() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* Dynamic Email OTP MFA Verification Modal */}
+      {requiresOtp && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/85 backdrop-blur-xl animate-fade-in">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden p-6 sm:p-8 animate-scale-in">
+            {/* Header */}
+            <div className="text-center mb-6">
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-2xl mb-4">
+                🔑
+              </div>
+              <h2 className="text-xl font-bold text-white">Enter Verification Code</h2>
+              <p className="text-slate-400 text-xs mt-1.5 leading-relaxed">
+                We have dispatched a 6-digit verification code to <span className="text-indigo-400 font-semibold">{email}</span>. Please verify your identity to proceed.
+              </p>
+            </div>
+
+            {/* OTP input field */}
+            <form onSubmit={handleOtpVerify} className="space-y-6">
+              <Input
+                label="MFA OTP Code"
+                type="text"
+                placeholder="000000"
+                value={otpCode}
+                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').substring(0, 6))}
+                required
+                className="text-center tracking-[8px] font-mono text-xl"
+                icon={
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                }
+              />
+
+              {/* Dev Mode Notification Alert */}
+              <div className="p-3.5 rounded-xl bg-amber-500/8 border border-amber-500/15 text-[11px] text-amber-300/80 leading-relaxed text-left flex items-start gap-2">
+                <span className="text-base mt-0.5">ℹ️</span>
+                <div>
+                  <strong className="font-semibold text-white">Dev Mode Sandbox:</strong> Since local SMTP mail servers are usually unconfigured, the verification OTP code is logged directly to your backend Node.js terminal/stdout console for quick, zero-friction testing!
+                </div>
+              </div>
+
+              {/* Countdown / Resend */}
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-slate-500">Didn't receive the code?</span>
+                {otpTimer > 0 ? (
+                  <span className="text-slate-400 font-medium">Resend in {otpTimer}s</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleResendOtp}
+                    className="text-indigo-400 hover:text-indigo-300 font-semibold transition-colors"
+                  >
+                    Resend Code
+                  </button>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-3">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setRequiresOtp(false)}
+                  className="flex-1 justify-center"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  isLoading={otpLoading}
+                  disabled={otpCode.length < 6}
+                  className="flex-1 justify-center"
+                >
+                  Verify & Login
+                </Button>
+              </div>
+            </form>
           </div>
         </div>
       )}

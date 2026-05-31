@@ -1,8 +1,8 @@
 'use client';
-
+ 
 import React from 'react';
 import { cn } from '../../lib/utils';
-
+ 
 const rankings = [
   { rank: 1, name: 'Arjun Mehta', score: 278, percentile: 99.8, change: 0 },
   { rank: 2, name: 'Sneha Sharma', score: 265, percentile: 99.5, change: 1 },
@@ -16,7 +16,41 @@ const rankings = [
   { rank: 10, name: 'Ishita Verma', score: 205, percentile: 94.5, change: 0 },
 ];
 
-export function RankingTable() {
+interface LeaderboardItem {
+  rank: number;
+  studentName: string;
+  studentEmail: string;
+  score: number;
+  totalMarks: number;
+  percentile: number;
+  testTitle: string;
+}
+
+interface RankingTableProps {
+  data?: LeaderboardItem[];
+}
+ 
+export function RankingTable({ data }: RankingTableProps) {
+  const list = data && data.length > 0
+    ? data.map((item) => ({
+        rank: item.rank,
+        name: item.studentName,
+        score: item.score,
+        totalMarks: item.totalMarks,
+        percentile: item.percentile,
+        testTitle: item.testTitle,
+        change: 0, // dynamic cohort relative movement
+      }))
+    : rankings.map((r) => ({
+        rank: r.rank,
+        name: r.name,
+        score: r.score,
+        totalMarks: 300,
+        percentile: r.percentile,
+        testTitle: 'JEE Mock Exam',
+        change: r.change,
+      }));
+
   return (
     <div className="overflow-hidden rounded-xl border border-slate-700/30">
       <table className="w-full">
@@ -25,13 +59,13 @@ export function RankingTable() {
             <th className="text-left px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Rank</th>
             <th className="text-left px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Student</th>
             <th className="text-right px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Score</th>
-            <th className="text-right px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Percentile</th>
-            <th className="text-right px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Change</th>
+            <th className="text-right px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Accuracy</th>
+            <th className="text-right px-4 py-3 text-xs font-semibold text-slate-400 uppercase tracking-wider">Exam Attempted</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-800/50">
-          {rankings.map((student) => (
-            <tr key={student.rank} className="hover:bg-slate-800/30 transition-colors">
+          {list.map((student, idx) => (
+            <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
               <td className="px-4 py-3">
                 <span className={cn(
                   'w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold',
@@ -46,24 +80,19 @@ export function RankingTable() {
               <td className="px-4 py-3">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-xs font-bold text-white">
-                    {student.name.split(' ').map(n => n[0]).join('')}
+                    {student.name ? student.name.split(' ').map(n => n[0]).join('') : 'ST'}
                   </div>
-                  <span className="text-sm font-medium text-white">{student.name}</span>
+                  <span className="text-sm font-medium text-white">{student.name || 'Anonymous Student'}</span>
                 </div>
               </td>
               <td className="px-4 py-3 text-right">
-                <span className="text-sm font-bold text-white">{student.score}/300</span>
+                <span className="text-sm font-bold text-white">{student.score}/{student.totalMarks}</span>
               </td>
               <td className="px-4 py-3 text-right">
                 <span className="text-sm text-indigo-400 font-medium">{student.percentile}%</span>
               </td>
-              <td className="px-4 py-3 text-right">
-                {student.change !== 0 && (
-                  <span className={cn('text-xs font-medium', student.change > 0 ? 'text-emerald-400' : 'text-rose-400')}>
-                    {student.change > 0 ? `↑${student.change}` : `↓${Math.abs(student.change)}`}
-                  </span>
-                )}
-                {student.change === 0 && <span className="text-xs text-slate-500">—</span>}
+              <td className="px-4 py-3 text-right text-xs text-slate-400 max-w-[150px] truncate">
+                {student.testTitle || '—'}
               </td>
             </tr>
           ))}

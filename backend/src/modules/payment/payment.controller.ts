@@ -138,6 +138,15 @@ export class PaymentController {
       },
     });
 
+    await this.prisma.notification.create({
+      data: {
+        userId: dto.userId,
+        title: 'Wallet Credit',
+        message: `₹${dto.amount} successfully credited via Razorpay.`,
+        type: 'WALLET',
+      },
+    });
+
     return {
       message: `Successfully credited ₹${dto.amount} to your account balance`,
       user: updatedUser,

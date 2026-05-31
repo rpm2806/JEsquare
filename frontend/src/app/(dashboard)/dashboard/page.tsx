@@ -21,6 +21,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [statsData, setStatsData] = useState<any>(null);
   const [testsData, setTestsData] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
 
   // ─── Interactive Tour States & Logic ───
   const [tourActive, setTourActive] = useState(false);
@@ -125,6 +126,29 @@ export default function DashboardPage() {
               ]
             });
           }
+        } else if (user.role === 'SUPER_ADMIN') {
+          try {
+            const [saRes, tRes] = await Promise.all([
+              api.get('/analytics/super-admin'),
+              api.get('/tests', { params: { limit: 5 } })
+            ]);
+            const saStats = saRes.data || { totalStudents: 0, activeAttempts: 0, totalRevenue: 0 };
+            setTestsData(tRes.data.data || []);
+
+            const totalTestsCount = tRes.data?.pagination?.total ?? tRes.data?.length ?? 0;
+
+            setStatsData({
+              type: 'SUPER_ADMIN',
+              items: [
+                { title: 'Total Students', value: saStats.totalStudents, icon: '👥', color: 'from-indigo-500 to-blue-500', bg: 'bg-indigo-500/10' },
+                { title: 'Active Exam Takers', value: saStats.activeAttempts, icon: '⚡', color: 'from-amber-500 to-orange-500', bg: 'bg-amber-500/10' },
+                { title: 'Platform Revenue', value: `₹${saStats.totalRevenue}`, icon: '💰', color: 'from-emerald-500 to-green-500', bg: 'bg-emerald-500/10' },
+                { title: 'Test Templates', value: totalTestsCount, icon: '📝', color: 'from-violet-500 to-purple-500', bg: 'bg-violet-500/10' },
+              ]
+            });
+          } catch (e) {
+            console.error("Error fetching super admin stats:", e);
+          }
         } else {
           // Admin / Teacher
           const instituteId = user.instituteId;
@@ -148,15 +172,22 @@ export default function DashboardPage() {
               { title: 'Avg. Score', value: stats.avgScore ? Math.round(stats.avgScore) : '0', icon: '📈', color: 'from-amber-500 to-orange-500', bg: 'bg-amber-500/10' },
             ]
           });
+
+          const params: any = { limit: 5 };
+          if (user.instituteId) {
+            params.instituteId = user.instituteId;
+          }
+          const testsRes = await api.get('/tests', { params });
+          setTestsData(testsRes.data.data || []);
         }
 
-        // 2. Fetch Recent Tests
-        const params: any = { limit: 5 };
-        if (user.instituteId) {
-          params.instituteId = user.instituteId;
+        // 3. Fetch Notifications
+        try {
+          const notifRes = await api.get('/notifications');
+          setNotifications(notifRes.data || []);
+        } catch (eNotif) {
+          console.error('Failed to load dashboard notifications:', eNotif);
         }
-        const testsRes = await api.get('/tests', { params });
-        setTestsData(testsRes.data.data || []);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
       } finally {
@@ -302,20 +333,27 @@ export default function DashboardPage() {
         <div id="tour-notifications" className="transition-all duration-300">
           <Card>
             <h2 className="text-lg font-semibold text-white mb-4">Latest Notifications</h2>
-            <div className="space-y-4">
-              {[
-                { text: 'Complete your profiles to get personalized target recommendations.', time: '10 min ago', color: 'bg-indigo-500' },
-                { text: 'Mock test answers are fully synchronized with the local database.', time: '2 hours ago', color: 'bg-emerald-500' },
-                { text: 'Verify newly uploaded questions under the Questions section.', time: '1 day ago', color: 'bg-violet-500' },
-              ].map((activity, i) => (
-                <div key={i} className="flex items-start gap-3">
-                  <div className={`w-2 h-2 rounded-full ${activity.color} mt-1.5 shrink-0`} />
-                  <div>
-                    <p className="text-sm text-slate-300">{activity.text}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">{activity.time}</p>
+            <div className="space-y-4 animate-fade-in">
+              {notifications.length > 0 ? (
+                notifications.slice(0, 5).map((n) => (
+                  <div key={n.id} className="flex items-start gap-3">
+                    <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
+                      n.type === 'WALLET' ? 'bg-emerald-500' : 'bg-indigo-500'
+                    }`} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-white">{n.title}</p>
+                      <p className="text-sm text-slate-350 mt-0.5 leading-relaxed">{n.message}</p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {new Date(n.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })} at {new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
                   </div>
+                ))
+              ) : (
+                <div className="p-8 text-center text-slate-500 text-sm">
+                  No notifications found.
                 </div>
-              ))}
+              )}
             </div>
           </Card>
         </div>

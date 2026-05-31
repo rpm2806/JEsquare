@@ -72,7 +72,8 @@ export default function ExamPage() {
         
         // 1. Start the test attempt in the database!
         const attemptRes = await api.post('/attempts/start', { testId: params.testId });
-        setAttemptId(attemptRes.data.id);
+        const attemptData = attemptRes.data;
+        setAttemptId(attemptData.id);
 
         // 2. Fetch test details
         const res = await api.get(`/tests/${params.testId}`);
@@ -115,11 +116,22 @@ export default function ExamPage() {
 
         setQuestions(finalQuestions);
 
+        // Restore pre-saved state from database attempt
         reset();
+        const savedAnswers = attemptData.answers || [];
+        useExamStore.getState().restoreAttemptState(attemptData.id, finalQuestions, savedAnswers);
+
         setTotalQuestions(finalQuestions.length);
         setSections(sectNames);
-        setTimeRemaining((dbTest.duration || 180) * 60);
-        visitQuestion(0);
+
+        // Calculate remaining time: attempt duration - elapsed time
+        let timeRemainingSeconds = (dbTest.duration || 180) * 60;
+        if (attemptData.startedAt) {
+          const startedAtTime = new Date(attemptData.startedAt).getTime();
+          const elapsedSeconds = Math.floor((Date.now() - startedAtTime) / 1000);
+          timeRemainingSeconds = Math.max(0, timeRemainingSeconds - elapsedSeconds);
+        }
+        setTimeRemaining(timeRemainingSeconds);
       } catch (err) {
         console.error('Error fetching dynamic exam details, falling back:', err);
         const mappedMockQuestions = mockQuestions.map((q, i) => ({
@@ -154,31 +166,8 @@ export default function ExamPage() {
 
     setLoading(true);
     try {
-      const answersMap = useExamStore.getState().answers;
-
       if (attemptId) {
-        // Sequentially post all selected answers to the database
-        const savePromises = [];
-        for (let i = 0; i < questions.length; i++) {
-          const ans = answersMap.get(i);
-          if (ans) {
-            const q = questions[i];
-            const payload: any = { questionId: q.id };
-            if (q.type === 'NUMERICAL') {
-              payload.numericalAnswer = parseFloat(ans);
-            } else {
-              payload.selectedOption = ans;
-            }
-            savePromises.push(api.post(`/attempts/${attemptId}/answer`, payload));
-          }
-        }
-        
-        // Wait for all answers to save
-        if (savePromises.length > 0) {
-          await Promise.all(savePromises);
-        }
-
-        // Submit the attempt to evaluate the test
+        // Submit the attempt to evaluate the test (all answers are already autosaved on-the-fly!)
         await api.post(`/attempts/${attemptId}/submit`);
 
         // Force clean exit fullscreen

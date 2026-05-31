@@ -37,6 +37,15 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
+  @Post('verify-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify OTP code and complete login' })
+  @ApiResponse({ status: 200, description: 'Login successful' })
+  @ApiResponse({ status: 401, description: 'Invalid or expired OTP' })
+  async verifyOtp(@Body() dto: { email: string; code: string }) {
+    return this.authService.verifyOtp(dto.email, dto.code);
+  }
+
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refresh access token' })

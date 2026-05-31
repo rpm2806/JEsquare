@@ -340,4 +340,54 @@ export class AnalyticsService {
       })),
     };
   }
+
+  async getSuperAdminAnalytics() {
+    const [
+      totalStudents,
+      activeAttempts,
+      totalRevenueCollected,
+    ] = await Promise.all([
+      // 1. Total registered student count
+      this.prisma.user.count({
+        where: { role: 'STUDENT' },
+      }),
+      // 2. Active mock test attempts count
+      this.prisma.attempt.count({
+        where: { status: 'IN_PROGRESS' },
+      }),
+      // 3. Revenue collected (sum of all subscriptions + simulated payments)
+      this.prisma.subscription.aggregate({
+        _sum: { amount: true },
+      }),
+    ]);
+
+    return {
+      totalStudents,
+      activeAttempts,
+      totalRevenue: totalRevenueCollected._sum.amount || 0,
+    };
+  }
+
+  async getGlobalLeaderboard() {
+    const topAttempts = await this.prisma.attempt.findMany({
+      where: { status: 'EVALUATED' },
+      include: {
+        student: { select: { id: true, name: true, email: true, avatar: true } },
+        test: { select: { title: true, totalMarks: true } },
+      },
+      orderBy: { score: 'desc' },
+      take: 10,
+    });
+
+    return topAttempts.map((a, i) => ({
+      rank: i + 1,
+      studentName: a.student.name,
+      studentEmail: a.student.email,
+      studentAvatar: a.student.avatar,
+      score: a.score || 0,
+      totalMarks: a.test.totalMarks || 100,
+      percentile: a.test.totalMarks > 0 ? Math.round(((a.score || 0) / a.test.totalMarks) * 100 * 10) / 10 : 0,
+      testTitle: a.test.title,
+    }));
+  }
 }
