@@ -231,6 +231,10 @@ export class QuestionsService {
       throw new ForbiddenException('Insufficient permissions');
     }
 
+    // Cascade delete linked dependencies to prevent foreign key constraints
+    await this.prisma.answer.deleteMany({ where: { questionId: id } });
+    await this.prisma.testQuestion.deleteMany({ where: { questionId: id } });
+
     await this.prisma.question.delete({ where: { id } });
     return { message: 'Question deleted successfully' };
   }
